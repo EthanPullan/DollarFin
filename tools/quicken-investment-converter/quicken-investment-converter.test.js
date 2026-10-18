@@ -120,3 +120,14 @@ test('buildOutput sorts by the chosen date, keeping statement order within a day
     assert.deepEqual(plain(dates), plain([...dates].sort()));
   }
 });
+
+test('CONT (registered-account contribution) becomes an XIn with a memo', () => {
+  const objs = month('"2026-03-02","CONT","Contribution (executed at 2026-03-02)","200.0","200.0","CAD"');
+  const { items, warnings } = Q.convert(objs);
+  assert.equal(warnings.length, 0);
+  const [r] = Q.buildOutput(items, OPTS);
+  assert.equal(r.action, 'XIn');
+  assert.equal(r.amount, '200.00');
+  assert.equal(r.memo, 'Contribution');
+  assert.equal(r.transferAccount, 'Chequing');
+});

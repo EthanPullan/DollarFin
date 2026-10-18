@@ -266,6 +266,8 @@ function convert(objs) {
                    shares: m[4].replace(/,/g, ''), price: m[5].replace(/,/g, '') });
     } else if (type === 'TRFIN') {
       items.push({ ...base, action: 'XIn' });
+    } else if (type === 'CONT') {  // registered-account contribution (TFSA / RRSP / FHSA): cash in from elsewhere
+      items.push({ ...base, action: 'XIn', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') || 'Contribution' });
     } else if (type === 'TRFOUT') {
       items.push({ ...base, action: 'XOut', guessed: true });
     } else if (type === 'FEE') {
