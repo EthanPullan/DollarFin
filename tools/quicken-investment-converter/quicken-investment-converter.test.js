@@ -143,3 +143,26 @@ test('DIV in Wealthsimple wording becomes a Div for the right security, with no 
   assert.equal(r.optionalSymbol, 'XYZ');
   assert.equal(r.amount, '1.23');
 });
+
+test('stock lending: zero-amount LOAN / RECALL are left out with a note; FPLINT is interest income', () => {
+  const objs = month(
+    '"2026-05-11","LOAN","XYZ - Example ETF: 2.0000 Shares on loan (executed at 2026-05-11)","0.0","0.0","XYZ"',
+    '"2026-05-13","RECALL","XYZ - Example ETF: Loan of 2.0000 shares terminated (executed at 2026-05-13)","0.0","0.0","XYZ"',
+    '"2026-05-15","FPLINT","Stock lending monthly interest payment","0.02","0.02","CAD"');
+  const { items, warnings, notes } = Q.combine([{ id: 1, name: 'x.csv', objs }]);
+  assert.equal(warnings.length, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /^2 stock-lending row/);
+  const rows = Q.buildOutput(items, OPTS);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].action, 'IntInc');
+  assert.equal(rows[0].amount, '0.02');
+  assert.equal(rows[0].memo, 'Stock lending monthly interest payment');
+  assert.equal(rows[0].security, '');
+});
+
+test('a LOAN that moves cash is not silently dropped', () => {
+  const objs = month('"2026-05-11","LOAN","XYZ - Example ETF: odd","5.0","5.0","CAD"');
+  const { warnings } = Q.combine([{ id: 1, name: 'x.csv', objs }]);
+  assert.match(warnings[0], /unsupported transaction type "LOAN"/);
+});

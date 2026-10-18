@@ -94,6 +94,8 @@
     border-left:3px solid var(--accent);border-radius:8px;padding:9px 11px;font-size:13px;line-height:1.5;}
   .warn + .warn{margin-top:8px;}
   .warn .ic{flex:none;color:var(--accent-deep);font-weight:700;}
+  .warn.note{background:var(--together-soft);border-left-color:var(--together);}
+  .warn.note .ic{color:var(--together);}
 
   .scroll{overflow-x:auto;}
   table{border-collapse:collapse;width:100%;font-size:12.5px;}
@@ -174,7 +176,7 @@
         <div class="empty" id="emptyState">Choose one or more Wealthsimple monthly-statement CSVs on the left to preview the Quicken import.</div>
 
         <div class="card hidden" id="warnSection">
-          <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
+          <div class="card-head"><h2 class="section-title" id="warnTitle">Needs your attention</h2></div>
           <div id="warnings"></div>
         </div>
 
@@ -248,9 +250,10 @@ const TRADE_RE = /^(\S+)\s+-\s+(.+?)\s*:\s*(Bought|Sold)\s+([\d.,]+)\s+shares\s+
 const EXEC_RE = /executed at (\d{4}-\d{2}-\d{2})/i;
 const num = s => parseFloat(String(s).replace(/,/g, ''));
 
-// Returns { items, warnings }. items are neutral records; formatting happens in buildOutput().
+// Returns { items, warnings, skipped }. items are neutral records; formatting happens in buildOutput().
+// skipped counts rows left out on purpose (they move no cash), so the UI can say so.
 function convert(objs) {
-  const items = [], warnings = [];
+  const items = [], warnings = [], skipped = { lending: 0 };
   objs.forEach((o, idx) => {
     const type = (o.transaction || '').toUpperCase();
     const desc = o.description || '';
@@ -272,6 +275,11 @@ function convert(objs) {
       items.push({ ...base, action: 'XOut', guessed: true });
     } else if (type === 'FEE') {
       items.push({ ...base, action: 'MiscExp', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') });
+    } else if (type === 'FPLINT') {  // "Stock lending monthly interest payment" — cash income
+      items.push({ ...base, action: 'IntInc', memo: desc });
+    } else if ((type === 'LOAN' || type === 'RECALL') && amt === 0) {
+      // Shares lent out / returned under stock lending: still owned, no cash moves — nothing for Quicken.
+      skipped.lending++;
     } else if (type === 'DIV' || type === 'INT') {
       const m = desc.match(/^(\S+)\s+-\s+(.+?)\s*(?::|\(|$)/);
       if (type === 'DIV' && !m) { warnings.push(`Line ${base.line}: DIV row has no recognisable symbol, row skipped.`); return; }
@@ -283,20 +291,21 @@ function convert(objs) {
       warnings.push(`Line ${base.line}: unsupported transaction type "${o.transaction}", row skipped.`);
     }
   });
-  return { items, warnings };
+  return { items, warnings, skipped };
 }
 
 // files: [{ id, name, objs }] in any order. Converts each statement and joins them oldest first.
 // A row repeated in another file (overlapping exports) is dropped; repeats within one file are
 // real transactions — the running balance tells them apart, so they never collide by accident.
 function combine(files) {
-  const items = [], warnings = [], seen = new Map();
-  let dupes = 0;
+  const items = [], warnings = [], notes = [], seen = new Map();
+  let dupes = 0, lending = 0;
   const converted = files.map(f => ({ f, res: convert(f.objs) }));
   const first = c => c.res.items.reduce((m, i) => i.stmtDate < m ? i.stmtDate : m, '\uffff');
   converted.sort((a, b) => first(a) < first(b) ? -1 : first(a) > first(b) ? 1 : 0);
   converted.forEach(({ f, res }) => {
     res.warnings.forEach(w => warnings.push(files.length > 1 ? `${f.name} — ${w}` : w));
+    lending += res.skipped.lending;
     res.items.forEach(it => {
       const owner = seen.get(it.key);
       if (owner !== undefined && owner !== f.id) { dupes++; return; }
@@ -308,7 +317,9 @@ function combine(files) {
     warnings.push(`${dupes} row(s) appeared in more than one statement and were included once. Check you haven't loaded the same month twice.`);
   if (items.some(i => i.guessed))
     warnings.push('Rows for XOut / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
-  return { items, warnings };
+  if (lending)
+    notes.push(`${lending} stock-lending row(s) (LOAN / RECALL) left out: the shares stay yours and no cash moves, so Quicken has nothing to record.`);
+  return { items, warnings, notes };
 }
 
 function buildOutput(items, opts) {
@@ -377,8 +388,10 @@ function toCSV(rows) {
     $('stFiles').textContent = files.length;
     $('emptyState').classList.toggle('hidden', files.length > 0);
     $('previewSection').classList.toggle('hidden', !files.length);
-    $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('');
-    $('warnSection').classList.toggle('hidden', !res.warnings.length);
+    $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('') +
+      res.notes.map(n => `<div class="warn note"><span class="ic">i</span><span>${esc(n)}</span></div>`).join('');
+    $('warnTitle').textContent = res.warnings.length ? 'Needs your attention' : 'Notes';
+    $('warnSection').classList.toggle('hidden', !res.warnings.length && !res.notes.length);
 
     const secs = new Map();
     items.forEach(i => { if (i.symbol) secs.set(i.symbol, i.name); });
