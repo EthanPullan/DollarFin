@@ -115,6 +115,8 @@
   .statusbar .dotline{width:1px;height:18px;background:var(--line);}
   .statusbar .stamp{margin-left:auto;font-size:12px;}
 
+  .linkbtn{border:none;background:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;}
+  .linkbtn:hover{color:var(--danger);}
   .hidden{display:none !important;}
 
   @media (max-width:880px){
@@ -169,6 +171,10 @@
         </div>
       </section>
 
+      <section class="section">
+        <p class="hint" style="margin:0">Account names (per Wealthsimple account), security names and the date choice are remembered on this device only.
+          <button type="button" class="linkbtn" id="forget">Forget them</button></p>
+      </section>
     </aside>
 
     <section class="stage">
@@ -353,9 +359,40 @@ function toCSV(rows) {
 (function(){
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  let items = [], files = [], nextFileId = 1, dateMode = 'executed';
-  const secOverrides = {};
+  const LS = 'dollarfin:quicken-investment:settings';
+
+  // Remembered on this device only:
+  // { dateMode, secs:{symbol:{name,symbol}}, accounts:{wealthsimpleId|'_last':{account,xfer}} }
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {}
+  saved.accounts ||= {};
+  let items = [], files = [], nextFileId = 1, dateMode = saved.dateMode === 'statement' ? 'statement' : 'executed';
+  const secOverrides = Object.assign({}, saved.secs);
   const xferByRow = {};
+
+  // Statement filenames end "...-<account id>-YYYY-MM-DD.csv"; settings are kept per account when
+  // every loaded file is from the same one, so a TFSA and an RRSP each get their own Quicken name.
+  const acctIdOf = name => (name.match(/-([A-Z0-9]{8,})-\d{4}-\d{2}-\d{2}(?:\s*\(\d+\))?\.csv$/i) || [])[1];
+  function acctKey() {
+    const ids = new Set(files.map(f => acctIdOf(f.name)));
+    return ids.size === 1 && !ids.has(undefined) ? [...ids][0] : '_last';
+  }
+  let shownKey = null, filledFrom = null;   // filledFrom: whose saved names are in the fields
+  function applySavedAccount() {
+    const key = acctKey();
+    if (key === shownKey) return;
+    shownKey = key;
+    const a = saved.accounts[key];
+    if (a) { $('account').value = a.account || ''; $('xfer').value = a.xfer || ''; filledFrom = a.from || key; }
+    else if (filledFrom && filledFrom !== '_last') { $('account').value = ''; $('xfer').value = ''; filledFrom = null; }
+  }
+  function save() {
+    const key = acctKey(), a = { account: $('account').value, xfer: $('xfer').value };
+    saved.accounts[key] = a; saved.accounts._last = { ...a, from: key };
+    filledFrom = key;
+    saved.secs = secOverrides; saved.dateMode = dateMode;
+    try { localStorage.setItem(LS, JSON.stringify(saved)); } catch (e) {}
+  }
 
   // Adds statements; a file with the same name as one already loaded replaces it.
   async function addFiles(list) {
@@ -381,6 +418,7 @@ function toCSV(rows) {
   function refresh() {
     const res = combine(files);
     items = res.items;
+    applySavedAccount();
     const counts = {};
     items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
     $('fileList').innerHTML = files.map(f => `<li><span class="fname">${esc(f.name)}</span>
@@ -404,7 +442,7 @@ function toCSV(rows) {
     $('secSection').classList.toggle('hidden', secs.size === 0);
     $('stSec').textContent = secs.size;
     $('secTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
-      (secOverrides[inp.dataset.s] ||= {})[inp.dataset.k] = inp.value; render();
+      (secOverrides[inp.dataset.s] ||= {})[inp.dataset.k] = inp.value; save(); render();
     }));
     render();
   }
@@ -457,12 +495,25 @@ function toCSV(rows) {
     updateStatus();
   }
 
-  ['account','xfer'].forEach(id => $(id).addEventListener('input', render));
-  $('dateMode').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-    dateMode = b.dataset.v;
-    $('dateMode').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
-    render();
-  }));
+  ['account','xfer'].forEach(id => $(id).addEventListener('input', () => { save(); render(); }));
+  $('dateMode').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.v === dateMode);
+    b.addEventListener('click', () => {
+      dateMode = b.dataset.v;
+      $('dateMode').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+      save(); render();
+    });
+  });
+
+  $('forget').addEventListener('click', () => {
+    if (!confirm('Forget the saved account names, security names and date choice on this device?')) return;
+    try { localStorage.removeItem(LS); } catch (e) {}
+    saved = { accounts: {} };
+    Object.keys(secOverrides).forEach(k => delete secOverrides[k]);
+    $('account').value = ''; $('xfer').value = ''; shownKey = filledFrom = null;
+    refresh();
+  });
+  applySavedAccount();
 
   $('dl').addEventListener('click', () => {
     const rows = current();

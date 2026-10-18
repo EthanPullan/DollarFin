@@ -15,3 +15,7 @@
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Research notes and reports (local working material)
+research_notes/
+reports/
