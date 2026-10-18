@@ -271,6 +271,8 @@ function convert(objs) {
       items.push({ ...base, action: 'XIn' });
     } else if (type === 'CONT') {  // registered-account contribution (TFSA / RRSP / FHSA): cash in from elsewhere
       items.push({ ...base, action: 'XIn', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') || 'Contribution' });
+    } else if (type === 'TRFINTF') {  // "Tax-free money transfer into the account" — cash between registered accounts
+      items.push({ ...base, action: 'XIn', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') || 'Tax-free transfer in' });
     } else if (type === 'TRFOUT') {
       items.push({ ...base, action: 'XOut', guessed: true });
     } else if (type === 'FEE') {

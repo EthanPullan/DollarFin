@@ -166,3 +166,14 @@ test('a LOAN that moves cash is not silently dropped', () => {
   const { warnings } = Q.combine([{ id: 1, name: 'x.csv', objs }]);
   assert.match(warnings[0], /unsupported transaction type "LOAN"/);
 });
+
+test('TRFINTF (tax-free cash transfer in) becomes an XIn with a memo', () => {
+  const objs = month('"2026-06-02","TRFINTF","Tax-free money transfer into the account (executed at 2026-06-02)","5.0","5.0","CAD"');
+  const { items, warnings } = Q.combine([{ id: 1, name: 'x.csv', objs }]);
+  assert.equal(warnings.length, 0);
+  const [r] = Q.buildOutput(items, OPTS);
+  assert.equal(r.action, 'XIn');
+  assert.equal(r.amount, '5.00');
+  assert.equal(r.memo, 'Tax-free money transfer into the account');
+  assert.equal(r.transferAccount, 'Chequing');
+});
