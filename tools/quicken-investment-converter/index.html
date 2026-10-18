@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quicken Investment Converter</title>
+<style>
+  :root{
+    --app-bg:#e9edf0; --panel:#fff; --panel-2:#f4f6f8; --room-bg:#f7f8f6;
+    --ink:#16241f; --muted:#67756f; --line:#d8dee2; --grid-line:rgba(31,61,53,.07);
+    --board:#1f3d35; --board-2:#173029; --board-line:#2c5247;
+    --accent:#e0982e; --accent-soft:#fbe6c8; --accent-deep:#b9781f;
+    --danger:#c43d35; --danger-soft:#f7e0de; --together:#2f6f9f; --together-soft:#dde9f3;
+    --ok:#3f9e6b;
+    --shadow:0 1px 2px rgba(20,40,33,.06),0 6px 18px rgba(20,40,33,.06);
+    --shadow-sm:0 1px 2px rgba(20,40,33,.10); --radius:12px;
+    --sans:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;} html,body{height:100%;}
+  body{margin:0;font-family:var(--sans);color:var(--ink);background:var(--app-bg);
+    -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45;}
+  button{font-family:inherit;}
+  input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink);}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+
+  .app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+  .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.14em;
+    text-transform:uppercase;font-size:13px;white-space:nowrap;}
+  .brand .mark{width:16px;height:16px;border-radius:4px;background:var(--accent);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.06);flex:none;}
+  .brand small{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--muted);font-size:11px;}
+  .spacer{flex:1;}
+
+  .main{flex:1;display:flex;min-height:0;}
+  .panel{width:344px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+    overflow-y:auto;padding:16px;}
+  .stage{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--app-bg);}
+  .stage-scroll{flex:1;overflow:auto;padding:16px;}
+
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 13px;
+    border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;display:inline-flex;
+    align-items:center;gap:7px;transition:background .12s,border-color .12s,transform .05s;}
+  .btn:hover{background:var(--panel-2);} .btn:active{transform:translateY(1px);}
+  .btn.primary{background:var(--board);border-color:var(--board);color:#fff;}
+  .btn.primary:hover{background:var(--board-2);}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;}
+  .btn .ic{font-size:15px;line-height:1;}
+
+  .section + .section{margin-top:18px;}
+  .section-title{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 9px;}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin:6px 0 0;}
+  .field + .field{margin-top:12px;}
+  .field-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 5px;}
+  input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel-2);}
+  input[type=text]:focus{outline:none;border-color:var(--accent);}
+
+  .drop{display:block;border:1px dashed var(--line);border-radius:10px;padding:18px 14px;text-align:center;
+    background:var(--panel-2);color:var(--muted);font-size:12.5px;line-height:1.55;cursor:pointer;
+    transition:border-color .12s,background .12s,color .12s;}
+  .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);}
+  .drop b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px;}
+  .file-name{font-family:var(--mono);font-size:11.5px;color:var(--board);margin-top:8px;word-break:break-all;}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .seg button{border:none;background:#fff;padding:6px 12px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
+  .seg button + button{border-left:1px solid var(--line);}
+  .seg button.active{background:var(--board);color:#fff;}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:16px;}
+  .card + .card{margin-top:16px;}
+  .card-head{display:flex;align-items:center;gap:9px;margin-bottom:10px;}
+  .card-head .section-title{margin:0;}
+  .count-pill{font-family:var(--mono);font-size:11px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:20px;padding:2px 9px;color:var(--muted);}
+
+  .empty{border:1px dashed var(--line);border-radius:10px;padding:16px;color:var(--muted);
+    font-size:12.5px;line-height:1.55;background:var(--panel-2);}
+
+  .warn{display:flex;gap:8px;align-items:flex-start;background:var(--accent-soft);color:var(--ink);
+    border-left:3px solid var(--accent);border-radius:8px;padding:9px 11px;font-size:13px;line-height:1.5;}
+  .warn + .warn{margin-top:8px;}
+  .warn .ic{flex:none;color:var(--accent-deep);font-weight:700;}
+
+  .scroll{overflow-x:auto;}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  td{font-family:var(--mono);font-size:12px;}
+  td.num{text-align:right;}
+  td input[type=text]{min-width:150px;padding:4px 7px;font-family:var(--mono);font-size:12px;}
+  td input.missing{border-color:var(--danger);background:var(--danger-soft);}
+  .sec-table td input[type=text]{min-width:120px;width:100%;}
+  .sec-table td:not(:first-child){width:45%;}
+
+  .statusbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:0 16px;min-height:42px;
+    border-top:1px solid var(--line);background:var(--panel);font-size:13px;color:var(--muted);}
+  .statusbar .stat b{font-family:var(--mono);font-weight:600;color:var(--ink);}
+  .statusbar .stat.warn-stat,.statusbar .stat.warn-stat b{color:var(--danger);}
+  .statusbar .dotline{width:1px;height:18px;background:var(--line);}
+  .statusbar .stamp{margin-left:auto;font-size:12px;}
+
+  .hidden{display:none !important;}
+
+  @media (max-width:880px){
+    .app{height:auto;min-height:100vh;}
+    .main{flex-direction:column;}
+    .panel{width:100%;border-right:none;border-bottom:1px solid var(--line);}
+    .brand{white-space:normal;flex-wrap:wrap;}
+  }
+  @media (prefers-reduced-motion:reduce){ .btn:active{transform:none;} *{scroll-behavior:auto;} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="toolbar">
+    <div class="brand"><span class="mark"></span>Quicken Investment Converter <small>Wealthsimple statement → Quicken CSV</small></div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download Quicken CSV</button>
+  </header>
+
+  <div class="main">
+    <aside class="panel">
+      <section class="section">
+        <h2 class="section-title">1 · Statement</h2>
+        <label class="drop" id="drop" for="file">
+          <b>Drop the statement CSV here</b>or click to choose a file
+        </label>
+        <input id="file" type="file" accept=".csv,text/csv" hidden>
+        <div class="file-name" id="fileName"></div>
+        <p class="hint">Runs entirely in your browser — the file is never uploaded.</p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">2 · Quicken settings</h2>
+        <div class="field">
+          <label class="field-label" for="account">Investment account name</label>
+          <input id="account" type="text" placeholder="e.g. Brokerage" autocomplete="off">
+          <p class="hint">Must match the Quicken account you're importing into.</p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="xfer">Default transfer account</label>
+          <input id="xfer" type="text" placeholder="e.g. Chequing" list="xferNames" autocomplete="off">
+          <datalist id="xferNames"></datalist>
+          <p class="hint">Used for any XIn / XOut row you haven't set individually in the preview. Leave blank if you'll set every row.</p>
+        </div>
+        <div class="field">
+          <span class="field-label">Transaction date</span>
+          <div class="seg" id="dateMode" role="group" aria-label="Transaction date">
+            <button type="button" data-v="executed" class="active">Trade date</button>
+            <button type="button" data-v="statement">Statement date</button>
+          </div>
+          <p class="hint">Trade date is the "executed at" date in the description. For buys it's usually a day before the statement date.</p>
+        </div>
+      </section>
+
+    </aside>
+
+    <section class="stage">
+      <div class="stage-scroll">
+        <div class="empty" id="emptyState">Choose a Wealthsimple monthly-statement CSV on the left to preview the Quicken import.</div>
+
+        <div class="card hidden" id="warnSection">
+          <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
+          <div id="warnings"></div>
+        </div>
+
+        <div class="card hidden" id="secSection">
+          <div class="card-head"><h2 class="section-title">Securities</h2></div>
+          <p class="hint" style="margin:0 0 9px">Quicken matches on name first, then symbol. Edit these to match how the securities already appear in Quicken.</p>
+          <div class="scroll"><table class="sec-table" id="secTable"></table></div>
+        </div>
+
+        <div class="card hidden" id="previewSection">
+          <div class="card-head">
+            <h2 class="section-title">Preview</h2>
+            <span class="count-pill" id="count">0</span>
+          </div>
+          <div class="scroll"><table id="preview"></table></div>
+        </div>
+      </div>
+
+      <footer class="statusbar">
+        <span class="stat"><b id="stTx">0</b> transactions</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stSec">0</b> securities</span>
+        <span class="dotline"></span>
+        <span class="stat" id="stMissingWrap"><b id="stMissing">0</b> transfers need an account</span>
+        <span class="stamp" id="stReady">Waiting for a statement</span>
+      </footer>
+    </section>
+  </div>
+</div>
+
+<script id="core">
+/* ===== core logic (DOM-free so it can be tested — see the .test.js beside this file) ===== */
+const HEADER = ['action','date','account','security','optionalSymbol','shares','price','amount','commissionFee','num','payee','memo','clearedStatus','category','tag','transferAccount','basisDate'];
+
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { f += '"'; i++; } else q = false; }
+      else f += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i+1] === '\n') i++;
+      row.push(f); f = '';
+      if (row.some(x => x !== '')) rows.push(row);
+      row = [];
+    } else f += c;
+  }
+  row.push(f);
+  if (row.some(x => x !== '')) rows.push(row);
+  return rows;
+}
+
+function toObjects(rows) {
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  return rows.slice(1).map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] ?? '').trim()])));
+}
+
+function csvField(v) {
+  v = v == null ? '' : String(v);
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
+// "XYZ - Example Bond Index ETF: Bought 10.5 shares at $20.00 per share (executed at 2026-01-14)"
+const TRADE_RE = /^(\S+)\s+-\s+(.+?)\s*:\s*(Bought|Sold)\s+([\d.,]+)\s+shares\s+at\s+\$([\d.,]+)\s+per share(?:\s*\(executed at (\d{4}-\d{2}-\d{2})\))?/i;
+const EXEC_RE = /executed at (\d{4}-\d{2}-\d{2})/i;
+const num = s => parseFloat(String(s).replace(/,/g, ''));
+
+// Returns { items, warnings }. items are neutral records; formatting happens in buildOutput().
+function convert(objs) {
+  const items = [], warnings = [];
+  objs.forEach((o, idx) => {
+    const type = (o.transaction || '').toUpperCase();
+    const desc = o.description || '';
+    const amt = num(o.amount);
+    const exec = (desc.match(EXEC_RE) || [])[1] || '';
+    const base = { id: idx, stmtDate: o.date, execDate: exec || o.date, amt, line: idx + 2 };
+
+    if (type === 'BUY' || type === 'SELL') {
+      const m = desc.match(TRADE_RE);
+      if (!m) { warnings.push(`Line ${base.line}: could not read ${type} description, row skipped.`); return; }
+      items.push({ ...base, action: type === 'BUY' ? 'Bought' : 'Sold', symbol: m[1], name: m[2].trim(),
+                   shares: m[4].replace(/,/g, ''), price: m[5].replace(/,/g, '') });
+    } else if (type === 'TRFIN') {
+      items.push({ ...base, action: 'XIn' });
+    } else if (type === 'TRFOUT') {
+      items.push({ ...base, action: 'XOut', guessed: true });
+    } else if (type === 'FEE') {
+      items.push({ ...base, action: 'MiscExp', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') });
+    } else if (type === 'DIV' || type === 'INT') {
+      const m = desc.match(/^(\S+)\s+-\s+(.+?)\s*(?::|\(|$)/);
+      if (type === 'DIV' && !m) { warnings.push(`Line ${base.line}: DIV row has no recognisable symbol, row skipped.`); return; }
+      items.push({ ...base, action: type === 'DIV' ? 'Div' : 'IntInc', guessed: true,
+                   symbol: m ? m[1] : '', name: m ? m[2].trim() : '' });
+    } else {
+      warnings.push(`Line ${base.line}: unsupported transaction type "${o.transaction}", row skipped.`);
+    }
+  });
+  if (items.some(i => i.guessed))
+    warnings.push('Rows for XOut / Div / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
+  return { items, warnings };
+}
+
+function buildOutput(items, opts) {
+  return items.map(it => {
+    const ov = (it.symbol && opts.secOverrides[it.symbol]) || {};
+    const date = opts.dateMode === 'statement' ? it.stmtDate : it.execDate;
+    const abs = Math.abs(it.amt);
+    const amount = it.action === 'MiscExp' ? -abs : abs;
+    const r = Object.fromEntries(HEADER.map(h => [h, '']));
+    r.action = it.action; r.date = date; r.account = opts.account;
+    if (it.symbol) { r.security = ov.name ?? it.name; r.optionalSymbol = ov.symbol ?? it.symbol; }
+    if (it.shares) r.shares = it.shares;
+    if (it.price) r.price = it.price;
+    r.amount = amount.toFixed(2);
+    if (it.memo) r.memo = it.memo;
+    if (it.action === 'XIn' || it.action === 'XOut') r.transferAccount = ((opts.xferByRow || {})[it.id] || '').trim() || opts.xfer;
+    r._id = it.id;
+    return r;
+  });
+}
+
+function toCSV(rows) {
+  return [HEADER.join(',')].concat(rows.map(r => HEADER.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
+}
+</script>
+
+<script>
+/* ===== UI ===== */
+(function(){
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  let items = [], baseName = 'statement', dateMode = 'executed';
+  const secOverrides = {};
+  const xferByRow = {};
+
+  function loadText(text, name) {
+    const rows = parseCSV(text);
+    if (rows.length < 2) { alert('That file looks empty.'); return; }
+    const res = convert(toObjects(rows));
+    items = res.items;
+    [secOverrides, xferByRow].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+    baseName = name.replace(/\.csv$/i, '');
+    $('fileName').textContent = name;
+    $('emptyState').classList.add('hidden');
+    $('previewSection').classList.remove('hidden');
+    $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('');
+    $('warnSection').classList.toggle('hidden', !res.warnings.length);
+
+    const secs = new Map();
+    items.forEach(i => { if (i.symbol) secs.set(i.symbol, i.name); });
+    $('secTable').innerHTML = '<tr><th>From statement</th><th>Quicken name</th><th>Quicken symbol</th></tr>' +
+      [...secs].map(([sym, nm]) => `<tr><td>${esc(sym)}</td>
+        <td><input type="text" data-s="${esc(sym)}" data-k="name" value="${esc(nm)}"></td>
+        <td><input type="text" data-s="${esc(sym)}" data-k="symbol" value="${esc(sym)}"></td></tr>`).join('');
+    $('secSection').classList.toggle('hidden', secs.size === 0);
+    $('stSec').textContent = secs.size;
+    $('secTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      (secOverrides[inp.dataset.s] ||= {})[inp.dataset.k] = inp.value; render();
+    }));
+    render();
+  }
+
+  function current() {
+    return buildOutput(items, {
+      account: $('account').value.trim(), xfer: $('xfer').value.trim(), dateMode, secOverrides, xferByRow
+    });
+  }
+
+  const isXfer = r => r.action === 'XIn' || r.action === 'XOut';
+
+  function updateStatus() {
+    const rows = current();
+    const account = $('account').value.trim();
+    const missing = rows.filter(r => isXfer(r) && !r.transferAccount).length;
+    const ok = rows.length && account && !missing;
+    $('dl').disabled = !ok;
+    const why = !rows.length ? 'Waiting for a statement'
+      : !account ? 'Fill in the account name'
+      : missing ? `${missing} transfer row(s) still need a transfer account` : 'Ready to download';
+    $('dl').title = ok ? '' : why;
+    $('stReady').textContent = why;
+    $('stTx').textContent = rows.length;
+    $('stMissing').textContent = missing;
+    $('stMissingWrap').classList.toggle('warn-stat', missing > 0);
+    $('preview').querySelectorAll('input.xin').forEach(inp => {
+      const r = rows.find(x => String(x._id) === inp.dataset.id);
+      inp.classList.toggle('missing', !!r && !r.transferAccount);
+    });
+    $('xferNames').innerHTML = [...new Set([$('xfer').value.trim(), ...Object.values(xferByRow).map(v => v.trim())].filter(Boolean))]
+      .map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  function render() {
+    const rows = current();
+    const cols = ['action','date','account','security','optionalSymbol','shares','price','amount','memo','transferAccount'];
+    const numeric = new Set(['shares','price','amount']);
+    const ph = esc($('xfer').value.trim() || 'transfer account');
+    $('preview').innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
+      rows.map(r => '<tr>' + cols.map(c => {
+        if (c === 'transferAccount' && isXfer(r))
+          return `<td><input type="text" class="xin" data-id="${r._id}" list="xferNames" placeholder="${ph}" value="${esc(xferByRow[r._id] || '')}"></td>`;
+        return `<td${numeric.has(c) ? ' class="num"' : ''}>${esc(r[c])}</td>`;
+      }).join('') + '</tr>').join('');
+    $('preview').querySelectorAll('input.xin').forEach(inp => inp.addEventListener('input', () => {
+      xferByRow[inp.dataset.id] = inp.value; updateStatus();
+    }));
+    $('count').textContent = rows.length + (rows.length === 1 ? ' transaction' : ' transactions');
+    updateStatus();
+  }
+
+  ['account','xfer'].forEach(id => $(id).addEventListener('input', render));
+  $('dateMode').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    dateMode = b.dataset.v;
+    $('dateMode').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    render();
+  }));
+
+  $('dl').addEventListener('click', () => {
+    const blob = new Blob([toCSV(current())], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = baseName + '-quicken.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  const handleFile = f => { if (f) f.text().then(t => loadText(t, f.name)); };
+  $('file').addEventListener('change', e => { handleFile(e.target.files[0]); e.target.value = ''; });
+  ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+  $('drop').addEventListener('drop', e => handleFile(e.dataTransfer.files[0]));
+})();
+</script>
+</body>
+</html>

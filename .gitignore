@@ -1,0 +1,17 @@
+# Financial data must never be committed.
+# Every tool here runs in the browser on files you pick locally — keep real
+# statements, exports and imports out of the repo, wherever they're saved.
+*.csv
+*.tsv
+*.qif
+*.qfx
+*.ofx
+*.qxf
+*.xls
+*.xlsx
+*.pdf
+*.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

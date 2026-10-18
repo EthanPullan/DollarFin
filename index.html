@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Small, single-file money tools — converters for statements and exports. Everything runs in your browser; nothing is uploaded.">
+<meta name="theme-color" content="#1f3d35">
+<meta name="robots" content="noindex">
+<title>DollarFin</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23e0982e'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --app-bg:#e9edf0; --panel:#fff; --panel-2:#f4f6f8; --room-bg:#f7f8f6;
+    --ink:#16241f; --muted:#67756f; --line:#d8dee2; --grid-line:rgba(31,61,53,.07);
+    --board:#1f3d35; --board-2:#173029; --board-line:#2c5247;
+    --accent:#e0982e; --accent-soft:#fbe6c8; --accent-deep:#b9781f;
+    --danger:#c43d35; --danger-soft:#f7e0de; --together:#2f6f9f; --together-soft:#dde9f3;
+    --ok:#3f9e6b;
+    --shadow:0 1px 2px rgba(20,40,33,.06),0 6px 18px rgba(20,40,33,.06);
+    --shadow-sm:0 1px 2px rgba(20,40,33,.10); --radius:12px;
+    --sans:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;font-family:var(--sans);color:var(--ink);background:var(--app-bg);
+    -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45;}
+  a{color:inherit;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+
+  /* top bar */
+  .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:11px 20px;
+    background:var(--panel);border-bottom:1px solid var(--line);}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.14em;
+    text-transform:uppercase;font-size:13px;color:var(--ink);white-space:nowrap;}
+  .brand .mark{width:16px;height:16px;border-radius:4px;background:var(--accent);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.06);flex:none;}
+  .spacer{flex:1;}
+  .toolbar .count{font-family:var(--mono);font-size:11px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:20px;padding:3px 10px;color:var(--muted);}
+
+  /* page */
+  .wrap{max-width:1040px;margin:0 auto;padding:34px 20px 60px;}
+  .hero{margin:0 0 26px;}
+  .hero h1{margin:0 0 8px;font-size:26px;letter-spacing:-.01em;}
+  .hero p{margin:0;max-width:60ch;color:var(--muted);font-size:14.5px;line-height:1.6;}
+
+  .section-title{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:30px 0 12px;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(264px,1fr));gap:16px;}
+  .card{display:flex;flex-direction:column;gap:10px;text-decoration:none;color:inherit;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px;box-shadow:var(--shadow);
+    transition:transform .08s,box-shadow .12s,border-color .12s;}
+  .card:hover{transform:translateY(-2px);border-color:var(--accent);
+    box-shadow:0 2px 4px rgba(20,40,33,.14),0 10px 22px rgba(20,40,33,.10);}
+  .card .top{display:flex;align-items:center;gap:10px;}
+  .card .mark{width:22px;height:22px;border-radius:6px;background:var(--board);flex:none;
+    display:flex;align-items:center;justify-content:center;color:#eaf2ef;font-size:13px;}
+  .card h2{margin:0;font-size:15.5px;font-weight:700;flex:1;}
+  .card p{margin:0;font-size:13px;color:var(--muted);line-height:1.55;flex:1;}
+  .card .tags{display:flex;flex-wrap:wrap;gap:6px;}
+  .card .tag{font-size:11px;color:var(--muted);background:var(--panel-2);border:1px solid var(--line);
+    border-radius:20px;padding:2px 9px;}
+  .card .open{font-size:12.5px;font-weight:600;color:var(--board);display:inline-flex;align-items:center;gap:5px;}
+  .card .open .arr{transition:transform .12s;}
+  .card:hover .open .arr{transform:translateX(3px);}
+
+  .card.soon{cursor:default;background:var(--panel-2);border-style:dashed;box-shadow:none;
+    color:var(--muted);}
+  .card.soon:hover{transform:none;border-color:var(--line);box-shadow:none;}
+  .card.soon .mark{background:var(--line);color:var(--muted);}
+  .card.soon h2{color:var(--muted);}
+
+  footer{margin-top:42px;border-top:1px solid var(--line);padding-top:18px;
+    color:var(--muted);font-size:12.5px;line-height:1.6;}
+
+  @media (max-width:620px){ .hero h1{font-size:22px;} .wrap{padding:24px 16px 48px;} }
+  @media (prefers-reduced-motion:reduce){ .card{transition:none;} .card:hover{transform:none;} *{scroll-behavior:auto;} }
+</style>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand"><span class="mark"></span>DollarFin</div>
+    <div class="spacer"></div>
+    <span class="count" id="toolCount">1 tool</span>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Small converters for money paperwork.</h1>
+      <p>Each tool runs entirely in your browser. Statements you open are read on your device and never uploaded.</p>
+    </section>
+
+    <h2 class="section-title">Converters</h2>
+    <div class="grid" id="toolGrid">
+
+      <a class="card" href="tools/quicken-investment-converter/index.html">
+        <div class="top">
+          <span class="mark">⇄</span>
+          <h2>Quicken Investment Converter</h2>
+        </div>
+        <p>Turns a Wealthsimple monthly-statement CSV into Quicken's investment import CSV.</p>
+        <div class="tags">
+          <span class="tag">buys &amp; sells</span>
+          <span class="tag">transfers</span>
+          <span class="tag">fees</span>
+          <span class="tag">security mapping</span>
+        </div>
+        <span class="open">Open tool <span class="arr">→</span></span>
+      </a>
+
+      <div class="card soon" aria-disabled="true">
+        <div class="top">
+          <span class="mark">+</span>
+          <h2>Coming soon</h2>
+        </div>
+        <p>More soon.</p>
+      </div>
+
+    </div>
+
+    <footer>Static, single-file pages — your files never leave your device.</footer>
+  </main>
+
+  <script>
+    // Keep the tool count in the top bar honest as tools are added.
+    (function(){
+      const n = document.querySelectorAll('#toolGrid .card:not(.soon)').length;
+      document.getElementById('toolCount').textContent = n + (n===1 ? ' tool' : ' tools');
+    })();
+  </script>
+</body>
+</html>
