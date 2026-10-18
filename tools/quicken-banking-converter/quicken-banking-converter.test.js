@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQIF, encode1252 })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -80,4 +80,17 @@ test('toCSV writes Quicken\'s banking header verbatim and quotes fields that nee
   const lines = Q.toCSV(rows).split('\r\n');
   assert.equal(lines[0], 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum');
   assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,My Chequing,,Direct deposit received,');
+});
+
+test('toQIF writes one !Type:Bank list with signed amounts, payee, memo and category', () => {
+  const rows = Q.buildOutput(load().items, { ...OPTS, kinds: { 'Interest||in': { category: 'Interest Inc' }, 'MoneyMovement|TRANSFER|out': { category: '[TFSA]' } } });
+  const qif = Q.toQIF(rows);
+  assert.equal(qif.split('\r\n^\r\n')[0], '!Type:Bank\r\nD01/05/2026\r\nT50.00\r\nPDirect deposit\r\nMDirect deposit received');
+  assert.match(qif, /\r\nD01\/10\/2026\r\nT-25\.00\r\nPTransfer out\r\nMMoney transfer out of the account\r\nL\[TFSA\]\r\n\^/);
+  assert.match(qif, /\r\nD02\/01\/2026\r\nT0\.03\r\nPInterest\r\nMInterest received\r\nLInterest Inc\r\n\^\r\n$/);
+  assert.equal((qif.match(/\^\r\n/g) || []).length, 4);
+});
+
+test('encode1252 keeps French accents as single Windows-1252 bytes', () => {
+  assert.deepEqual([...Q.encode1252('Dépôt')], [0x44, 0xE9, 0x70, 0xF4, 0x74]);
 });

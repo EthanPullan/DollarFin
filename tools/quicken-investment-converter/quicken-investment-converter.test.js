@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV, toQIF, encode1252 })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -176,4 +176,33 @@ test('TRFINTF (tax-free cash transfer in) becomes an XIn with a memo', () => {
   assert.equal(r.amount, '5.00');
   assert.equal(r.memo, 'Tax-free money transfer into the account');
   assert.equal(r.transferAccount, 'Chequing');
+});
+
+test('toQIF lists securities first, then Invst records with positive totals and US dates', () => {
+  const items = Q.combine([{ id: 1, name: 's.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]).items;
+  const qif = Q.toQIF(Q.buildOutput(items, { ...OPTS, secOverrides: { ABC: { name: 'My: Equity' } } }));
+  assert.ok(qif.endsWith('\r\n') && !/[^\r]\n/.test(qif), 'CRLF line endings only');
+  const recs = qif.split('\r\n^\r\n');
+  assert.equal(recs[0], '!Type:Security\r\nNExample Bond ETF - Hedged\r\nSXYZ.F\r\nTStock');
+  assert.equal(recs[1], 'NMy: Equity\r\nSABC\r\nTStock');
+  assert.equal(recs[2], '!Type:Invst\r\nD01/02/2026\r\nNXIn\r\nT1000.00\r\nL[Chequing]\r\n$1000.00');
+  assert.equal(recs[3], 'D01/04/2026\r\nNBuy\r\nYExample Bond ETF - Hedged\r\nI20.00\r\nQ10.5\r\nT210.00');
+  assert.equal(recs[4], 'D01/05/2026\r\nNSell\r\nYMy: Equity\r\nI1234.50\r\nQ1000\r\nT1234500.00');
+  assert.equal(recs[5], 'D01/31/2026\r\nNMiscExp\r\nT0.25\r\nMManagement fees');
+});
+
+test('toQIF: dividends, interest and transfer-account names with QIF delimiters', () => {
+  const objs = month(
+    '"2026-04-06","DIV","XYZ - Example ETF: Cash dividend distribution, received on 2026-04-06, record date of 2026-03-30","1.23","1.23","CAD"',
+    '"2026-04-15","FPLINT","Stock lending monthly interest payment","0.02","1.25","CAD"',
+    '"2026-04-20","CONT","Contribution (executed at 2026-04-20)","5.0","6.25","CAD"');
+  const items = Q.combine([{ id: 1, name: 'x.csv', objs }]).items;
+  const qif = Q.toQIF(Q.buildOutput(items, { ...OPTS, xfer: 'Bank: Main/Joint' }));
+  assert.match(qif, /\r\nD04\/06\/2026\r\nNDiv\r\nYExample ETF\r\nT1\.23\r\n\^/);
+  assert.match(qif, /\r\nD04\/15\/2026\r\nNIntInc\r\nT0\.02\r\nMStock lending monthly interest payment\r\n\^/);
+  assert.match(qif, /\r\nNXIn\r\nT5\.00\r\nMContribution\r\nL\[Bank- Main-Joint\]\r\n\$5\.00\r\n\^/);
+});
+
+test('encode1252 writes Windows-1252 bytes: accents as single bytes, smart punctuation mapped, others "?"', () => {
+  assert.deepEqual([...Q.encode1252('Aé–€✓')], [0x41, 0xE9, 0x96, 0x80, 0x3F]);
 });

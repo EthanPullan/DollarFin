@@ -131,9 +131,10 @@
 <body>
 <div class="app">
   <header class="toolbar">
-    <div class="brand"><span class="mark"></span>Quicken Investment Converter <small>Wealthsimple statement → Quicken CSV</small></div>
+    <div class="brand"><span class="mark"></span>Quicken Investment Converter <small>Wealthsimple statement → Quicken CSV / QIF</small></div>
     <div class="spacer"></div>
-    <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download Quicken CSV</button>
+    <button class="btn" id="dlQif" disabled><span class="ic">⭳</span>Download QIF</button>
+    <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download CSV</button>
   </header>
 
   <div class="main">
@@ -169,6 +170,12 @@
           </div>
           <p class="hint">Trade date is the "executed at" date in the description. For buys it's usually a day before the statement date.</p>
         </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Importing</h2>
+        <p class="hint" style="margin:0">In Quicken for Windows use File › File Import, then the CSV or QIF File option. For QIF, pick the account — ignore the dialog's note that QIF isn't available for this account type.
+          Neither format skips duplicates, so import each month only once.</p>
       </section>
 
       <section class="section">
@@ -352,6 +359,53 @@ function buildOutput(items, opts) {
 function toCSV(rows) {
   return [HEADER.join(',')].concat(rows.map(r => HEADER.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
 }
+
+/* ----- QIF (Quicken Interchange Format) ----- */
+// Quicken for Windows (US and Canada) reads QIF dates as MM/DD/YYYY whatever the Windows date
+// setting, and mis-reads UTF-8 — so text goes out as Windows-1252 bytes with CRLF line endings.
+const qifText = s => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
+// Account names can't contain [ ] / | ^ : in Quicken (they're QIF delimiters); it swaps them for hyphens too.
+const qifAccount = s => qifText(s).replace(/[\[\]\/|^:]/g, '-');
+const CP1252 = { 0x20AC:0x80, 0x201A:0x82, 0x0192:0x83, 0x201E:0x84, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87,
+  0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A, 0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x2018:0x91, 0x2019:0x92,
+  0x201C:0x93, 0x201D:0x94, 0x2022:0x95, 0x2013:0x96, 0x2014:0x97, 0x02DC:0x98, 0x2122:0x99, 0x0161:0x9A,
+  0x203A:0x9B, 0x0153:0x9C, 0x017E:0x9E, 0x0178:0x9F };
+function encode1252(str) {
+  const out = new Uint8Array(str.length); let n = 0;
+  for (const ch of str) {
+    const c = ch.codePointAt(0);
+    out[n++] = c < 0x80 || (c >= 0xA0 && c <= 0xFF) ? c : (CP1252[c] ?? 0x3F);  // anything else → '?'
+  }
+  return out.slice(0, n);
+}
+
+const usDate = iso => { const [y, m, d] = iso.split('-'); return `${m}/${d}/${y}`; };
+const QIF_ACTION = { Bought: 'Buy', Sold: 'Sell', Div: 'Div', IntInc: 'IntInc', MiscExp: 'MiscExp', XIn: 'XIn', XOut: 'XOut' };
+
+// Same rows as the CSV. No !Account block: the account is chosen in Quicken's import dialog, so a
+// mistyped name can't silently create a new account. Securities are listed first because QIF
+// matches them by name. Totals are positive; the action carries the direction.
+function toQIF(rows) {
+  const L = [], secs = new Map();
+  rows.forEach(r => { if (r.security) secs.set(r.security, r.optionalSymbol); });
+  if (secs.size) {
+    L.push('!Type:Security');
+    secs.forEach((sym, name) => L.push('N' + qifText(name), ...(sym ? ['S' + qifText(sym)] : []), 'TStock', '^'));
+  }
+  L.push('!Type:Invst');
+  rows.forEach(r => {
+    const total = Math.abs(Number(r.amount)).toFixed(2);
+    L.push('D' + usDate(r.date), 'N' + QIF_ACTION[r.action]);
+    if (r.security) L.push('Y' + qifText(r.security));
+    if (r.price) L.push('I' + r.price);
+    if (r.shares) L.push('Q' + r.shares);
+    L.push('T' + total);
+    if (r.memo) L.push('M' + qifText(r.memo));
+    if (r.transferAccount) L.push('L[' + qifAccount(r.transferAccount) + ']', '$' + total);
+    L.push('^');
+  });
+  return L.join('\r\n') + '\r\n';
+}
 </script>
 
 <script>
@@ -465,6 +519,10 @@ function toCSV(rows) {
       : !account ? 'Fill in the account name'
       : missing ? `${missing} transfer row(s) still need a transfer account` : 'Ready to download';
     $('dl').title = ok ? '' : why;
+    // QIF doesn't carry the account name (it's picked in Quicken's import dialog).
+    const qifOk = rows.length && !missing;
+    $('dlQif').disabled = !qifOk;
+    $('dlQif').title = qifOk ? '' : why;
     $('stReady').textContent = why;
     $('stTx').textContent = rows.length;
     $('stMissing').textContent = missing;
@@ -515,16 +573,17 @@ function toCSV(rows) {
   });
   applySavedAccount();
 
-  $('dl').addEventListener('click', () => {
+  function download(data, type, ext) {
     const rows = current();
-    const blob = new Blob([toCSV(rows)], { type: 'text/csv' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = files.length === 1 ? files[0].name.replace(/\.csv$/i, '') + '-quicken.csv'
-      : `quicken-import-${rows[0].date}-to-${rows[rows.length - 1].date}.csv`;
+    a.href = URL.createObjectURL(new Blob([data], { type }));
+    a.download = (files.length === 1 ? files[0].name.replace(/\.csv$/i, '') + '-quicken'
+      : `quicken-import-${rows[0].date}-to-${rows[rows.length - 1].date}`) + ext;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
+  }
+  $('dl').addEventListener('click', () => download(toCSV(current()), 'text/csv', '.csv'));
+  $('dlQif').addEventListener('click', () => download(encode1252(toQIF(current())), 'application/octet-stream', '.qif'));
 
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
