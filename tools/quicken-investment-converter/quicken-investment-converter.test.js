@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, buildOutput, toCSV })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -83,4 +83,40 @@ test('toCSV writes the Quicken header and quotes fields that need it', () => {
   assert.equal(lines.length, 6);  // header + 4 rows + trailing newline
   assert.equal(Q.csvField('a,"b"'), '"a,""b"""');
   assert.equal(Q.csvField(null), '');
+});
+
+const H = '"date","transaction","description","amount","balance","currency"';
+const month = (...lines) => Q.toObjects(Q.parseCSV([H, ...lines].join('\n')));
+const FEB = month(
+  '"2026-02-03","TRFIN","Money transfer into the account (executed at 2026-02-03)","50.0","1050.0","CAD"',
+  '"2026-02-03","TRFIN","Money transfer into the account (executed at 2026-02-03)","50.0","1100.0","CAD"');
+const JAN = month(
+  '"2026-01-31","FEE","Management fees (executed at 2026-01-31)","-0.25","1000.0","CAD"');
+
+test('combine joins months oldest first whatever order the files were added', () => {
+  const { items, warnings } = Q.combine([{ id: 1, name: 'feb.csv', objs: FEB }, { id: 2, name: 'jan.csv', objs: JAN }]);
+  assert.deepEqual(plain(items.map(i => i.stmtDate)), ['2026-01-31', '2026-02-03', '2026-02-03']);
+  assert.deepEqual(plain(items.map(i => i.id)), ['2:0', '1:0', '1:1']);   // ids stay unique across files
+  assert.equal(warnings.length, 0);
+});
+
+test('combine keeps same-day repeats within a file but drops rows repeated across files', () => {
+  const { items, warnings } = Q.combine([{ id: 1, name: 'feb.csv', objs: FEB }, { id: 2, name: 'feb-again.csv', objs: FEB }]);
+  assert.equal(items.length, 2);
+  assert.match(warnings[0], /2 row\(s\) appeared in more than one statement/);
+});
+
+test('combine prefixes per-file warnings with the file name when there are several files', () => {
+  const bad = month('"2026-03-01","WEIRD","x","1.0","1.0","CAD"');
+  const { warnings } = Q.combine([{ id: 1, name: 'jan.csv', objs: JAN }, { id: 2, name: 'mar.csv', objs: bad }]);
+  assert.match(warnings[0], /^mar\.csv — Line 2: unsupported/);
+});
+
+test('buildOutput sorts by the chosen date, keeping statement order within a day', () => {
+  const items = Q.combine([{ id: 1, name: 's.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]).items;
+  // with statement dates the buy (stmt 01-05) and sell (stmt 01-06) keep order; with trade dates too
+  for (const dateMode of ['executed', 'statement']) {
+    const dates = Q.buildOutput(items, { ...OPTS, dateMode }).map(r => r.date);
+    assert.deepEqual(plain(dates), plain([...dates].sort()));
+  }
 });

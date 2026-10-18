@@ -64,7 +64,15 @@
     transition:border-color .12s,background .12s,color .12s;}
   .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);}
   .drop b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px;}
-  .file-name{font-family:var(--mono);font-size:11.5px;color:var(--board);margin-top:8px;word-break:break-all;}
+  .files{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .files:empty{display:none;}
+  .files li{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;
+    border:1px solid var(--line);border-radius:8px;background:#fff;}
+  .files .fname{flex:1;min-width:0;font-family:var(--mono);font-size:11.5px;color:var(--board);word-break:break-all;}
+  .files .fmeta{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .xbtn{border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;
+    line-height:1;padding:2px 4px;border-radius:6px;}
+  .xbtn:hover{color:var(--danger);background:var(--danger-soft);}
 
   .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
   .seg button{border:none;background:#fff;padding:6px 12px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
@@ -127,13 +135,13 @@
   <div class="main">
     <aside class="panel">
       <section class="section">
-        <h2 class="section-title">1 · Statement</h2>
+        <h2 class="section-title">1 · Statements</h2>
         <label class="drop" id="drop" for="file">
-          <b>Drop the statement CSV here</b>or click to choose a file
+          <b>Drop statement CSVs here</b>or click to choose — pick several months at once, or add more later
         </label>
-        <input id="file" type="file" accept=".csv,text/csv" hidden>
-        <div class="file-name" id="fileName"></div>
-        <p class="hint">Runs entirely in your browser — the file is never uploaded.</p>
+        <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
+        <ul class="files" id="fileList"></ul>
+        <p class="hint">All months are combined into one import, in date order. Runs entirely in your browser — files are never uploaded.</p>
       </section>
 
       <section class="section">
@@ -163,7 +171,7 @@
 
     <section class="stage">
       <div class="stage-scroll">
-        <div class="empty" id="emptyState">Choose a Wealthsimple monthly-statement CSV on the left to preview the Quicken import.</div>
+        <div class="empty" id="emptyState">Choose one or more Wealthsimple monthly-statement CSVs on the left to preview the Quicken import.</div>
 
         <div class="card hidden" id="warnSection">
           <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
@@ -186,6 +194,8 @@
       </div>
 
       <footer class="statusbar">
+        <span class="stat"><b id="stFiles">0</b> statements</span>
+        <span class="dotline"></span>
         <span class="stat"><b id="stTx">0</b> transactions</span>
         <span class="dotline"></span>
         <span class="stat"><b id="stSec">0</b> securities</span>
@@ -246,7 +256,8 @@ function convert(objs) {
     const desc = o.description || '';
     const amt = num(o.amount);
     const exec = (desc.match(EXEC_RE) || [])[1] || '';
-    const base = { id: idx, stmtDate: o.date, execDate: exec || o.date, amt, line: idx + 2 };
+    const base = { id: idx, stmtDate: o.date, execDate: exec || o.date, amt, line: idx + 2,
+                   key: [o.date, o.transaction, desc, o.amount, o.balance].join('|') };
 
     if (type === 'BUY' || type === 'SELL') {
       const m = desc.match(TRADE_RE);
@@ -268,6 +279,29 @@ function convert(objs) {
       warnings.push(`Line ${base.line}: unsupported transaction type "${o.transaction}", row skipped.`);
     }
   });
+  return { items, warnings };
+}
+
+// files: [{ id, name, objs }] in any order. Converts each statement and joins them oldest first.
+// A row repeated in another file (overlapping exports) is dropped; repeats within one file are
+// real transactions — the running balance tells them apart, so they never collide by accident.
+function combine(files) {
+  const items = [], warnings = [], seen = new Map();
+  let dupes = 0;
+  const converted = files.map(f => ({ f, res: convert(f.objs) }));
+  const first = c => c.res.items.reduce((m, i) => i.stmtDate < m ? i.stmtDate : m, '\uffff');
+  converted.sort((a, b) => first(a) < first(b) ? -1 : first(a) > first(b) ? 1 : 0);
+  converted.forEach(({ f, res }) => {
+    res.warnings.forEach(w => warnings.push(files.length > 1 ? `${f.name} — ${w}` : w));
+    res.items.forEach(it => {
+      const owner = seen.get(it.key);
+      if (owner !== undefined && owner !== f.id) { dupes++; return; }
+      seen.set(it.key, f.id);
+      items.push({ ...it, id: f.id + ':' + it.id, file: f.name });
+    });
+  });
+  if (dupes)
+    warnings.push(`${dupes} row(s) appeared in more than one statement and were included once. Check you haven't loaded the same month twice.`);
   if (items.some(i => i.guessed))
     warnings.push('Rows for XOut / Div / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
   return { items, warnings };
@@ -289,7 +323,7 @@ function buildOutput(items, opts) {
     if (it.action === 'XIn' || it.action === 'XOut') r.transferAccount = ((opts.xferByRow || {})[it.id] || '').trim() || opts.xfer;
     r._id = it.id;
     return r;
-  });
+  }).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);  // stable: same-day rows keep statement order
 }
 
 function toCSV(rows) {
@@ -302,20 +336,43 @@ function toCSV(rows) {
 (function(){
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  let items = [], baseName = 'statement', dateMode = 'executed';
+  let items = [], files = [], nextFileId = 1, dateMode = 'executed';
   const secOverrides = {};
   const xferByRow = {};
 
-  function loadText(text, name) {
-    const rows = parseCSV(text);
-    if (rows.length < 2) { alert('That file looks empty.'); return; }
-    const res = convert(toObjects(rows));
+  // Adds statements; a file with the same name as one already loaded replaces it.
+  async function addFiles(list) {
+    const empty = [];
+    for (const f of list) {
+      const rows = parseCSV(await f.text());
+      if (rows.length < 2) { empty.push(f.name); continue; }
+      const entry = { id: nextFileId++, name: f.name, objs: toObjects(rows) };
+      const i = files.findIndex(x => x.name === f.name);
+      if (i >= 0) files[i] = entry; else files.push(entry);
+    }
+    if (empty.length) alert('Skipped (looks empty): ' + empty.join(', '));
+    const firstDate = f => f.objs.reduce((m, o) => o.date < m ? o.date : m, '\uffff');
+    files.sort((a, b) => firstDate(a) < firstDate(b) ? -1 : firstDate(a) > firstDate(b) ? 1 : 0);
+    refresh();
+  }
+
+  function removeFile(id) {
+    files = files.filter(f => f.id !== id);
+    refresh();
+  }
+
+  function refresh() {
+    const res = combine(files);
     items = res.items;
-    [secOverrides, xferByRow].forEach(o => Object.keys(o).forEach(k => delete o[k]));
-    baseName = name.replace(/\.csv$/i, '');
-    $('fileName').textContent = name;
-    $('emptyState').classList.add('hidden');
-    $('previewSection').classList.remove('hidden');
+    const counts = {};
+    items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
+    $('fileList').innerHTML = files.map(f => `<li><span class="fname">${esc(f.name)}</span>
+      <span class="fmeta">${counts[f.name] || 0}</span>
+      <button class="xbtn" data-id="${f.id}" title="Remove" aria-label="Remove ${esc(f.name)}">×</button></li>`).join('');
+    $('fileList').querySelectorAll('.xbtn').forEach(b => b.addEventListener('click', () => removeFile(Number(b.dataset.id))));
+    $('stFiles').textContent = files.length;
+    $('emptyState').classList.toggle('hidden', files.length > 0);
+    $('previewSection').classList.toggle('hidden', !files.length);
     $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('');
     $('warnSection').classList.toggle('hidden', !res.warnings.length);
 
@@ -323,8 +380,8 @@ function toCSV(rows) {
     items.forEach(i => { if (i.symbol) secs.set(i.symbol, i.name); });
     $('secTable').innerHTML = '<tr><th>From statement</th><th>Quicken name</th><th>Quicken symbol</th></tr>' +
       [...secs].map(([sym, nm]) => `<tr><td>${esc(sym)}</td>
-        <td><input type="text" data-s="${esc(sym)}" data-k="name" value="${esc(nm)}"></td>
-        <td><input type="text" data-s="${esc(sym)}" data-k="symbol" value="${esc(sym)}"></td></tr>`).join('');
+        <td><input type="text" data-s="${esc(sym)}" data-k="name" value="${esc(secOverrides[sym]?.name ?? nm)}"></td>
+        <td><input type="text" data-s="${esc(sym)}" data-k="symbol" value="${esc(secOverrides[sym]?.symbol ?? sym)}"></td></tr>`).join('');
     $('secSection').classList.toggle('hidden', secs.size === 0);
     $('stSec').textContent = secs.size;
     $('secTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
@@ -356,7 +413,7 @@ function toCSV(rows) {
     $('stMissing').textContent = missing;
     $('stMissingWrap').classList.toggle('warn-stat', missing > 0);
     $('preview').querySelectorAll('input.xin').forEach(inp => {
-      const r = rows.find(x => String(x._id) === inp.dataset.id);
+      const r = rows.find(x => x._id === inp.dataset.id);
       inp.classList.toggle('missing', !!r && !r.transferAccount);
     });
     $('xferNames').innerHTML = [...new Set([$('xfer').value.trim(), ...Object.values(xferByRow).map(v => v.trim())].filter(Boolean))]
@@ -389,18 +446,20 @@ function toCSV(rows) {
   }));
 
   $('dl').addEventListener('click', () => {
-    const blob = new Blob([toCSV(current())], { type: 'text/csv' });
+    const rows = current();
+    const blob = new Blob([toCSV(rows)], { type: 'text/csv' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = baseName + '-quicken.csv';
+    a.href = URL.createObjectURL(blob);
+    a.download = files.length === 1 ? files[0].name.replace(/\.csv$/i, '') + '-quicken.csv'
+      : `quicken-import-${rows[0].date}-to-${rows[rows.length - 1].date}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
-  const handleFile = f => { if (f) f.text().then(t => loadText(t, f.name)); };
-  $('file').addEventListener('change', e => { handleFile(e.target.files[0]); e.target.value = ''; });
+  $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
   ['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
-  $('drop').addEventListener('drop', e => handleFile(e.dataTransfer.files[0]));
+  $('drop').addEventListener('drop', e => addFiles([...e.dataTransfer.files]));
 })();
 </script>
 </body>
