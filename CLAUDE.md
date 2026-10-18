@@ -33,3 +33,7 @@ deployed as a static site via **GitHub Pages** from the repo root.
 ## Commit / PR rules
 - **Never include Claude session links** in commit messages, PR descriptions,
   code, comments, or any other artifact. (Plain co-author attribution is fine.)
+- **Push finished work straight to `main`** — standing instruction from the repo
+  owner, no need to ask each time. Work on a branch if you like, but land it on
+  `main` when it's done and tested. (Solo project; `main` is what GitHub Pages
+  serves.)
