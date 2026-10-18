@@ -275,7 +275,9 @@ function convert(objs) {
     } else if (type === 'DIV' || type === 'INT') {
       const m = desc.match(/^(\S+)\s+-\s+(.+?)\s*(?::|\(|$)/);
       if (type === 'DIV' && !m) { warnings.push(`Line ${base.line}: DIV row has no recognisable symbol, row skipped.`); return; }
-      items.push({ ...base, action: type === 'DIV' ? 'Div' : 'IntInc', guessed: true,
+      // DIV format confirmed against a real statement:
+      // "XYZ - Example ETF: Cash dividend distribution, received on 2026-01-05, record date of 2025-12-30"
+      items.push({ ...base, action: type === 'DIV' ? 'Div' : 'IntInc', guessed: type === 'INT',
                    symbol: m ? m[1] : '', name: m ? m[2].trim() : '' });
     } else {
       warnings.push(`Line ${base.line}: unsupported transaction type "${o.transaction}", row skipped.`);
@@ -305,7 +307,7 @@ function combine(files) {
   if (dupes)
     warnings.push(`${dupes} row(s) appeared in more than one statement and were included once. Check you haven't loaded the same month twice.`);
   if (items.some(i => i.guessed))
-    warnings.push('Rows for XOut / Div / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
+    warnings.push('Rows for XOut / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
   return { items, warnings };
 }
 

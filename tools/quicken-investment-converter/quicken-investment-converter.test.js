@@ -131,3 +131,15 @@ test('CONT (registered-account contribution) becomes an XIn with a memo', () => 
   assert.equal(r.memo, 'Contribution');
   assert.equal(r.transferAccount, 'Chequing');
 });
+
+test('DIV in Wealthsimple wording becomes a Div for the right security, with no warning', () => {
+  const objs = month('"2026-04-06","DIV","XYZ - Example Equity ETF Portfolio: Cash dividend distribution, received on 2026-04-06, record date of 2026-03-30","1.23","101.23","CAD"');
+  const { items, warnings } = Q.combine([{ id: 1, name: 'x.csv', objs }]);
+  assert.equal(warnings.length, 0);
+  const [r] = Q.buildOutput(items, OPTS);
+  assert.equal(r.action, 'Div');
+  assert.equal(r.date, '2026-04-06');
+  assert.equal(r.security, 'Example Equity ETF Portfolio');
+  assert.equal(r.optionalSymbol, 'XYZ');
+  assert.equal(r.amount, '1.23');
+});
