@@ -11,6 +11,7 @@ Files you open are read on your device and never uploaded.
 | Tool | What it does |
 | --- | --- |
 | [Quicken Investment Converter](https://ethanpullan.github.io/DollarFin/tools/quicken-investment-converter/) | Wealthsimple monthly-statement CSVs → one Quicken investment import CSV. Load several months at once and they're combined in date order (rows repeated across overlapping statements are kept once). Buys, sells, transfers in/out, fees, dividends and interest; rename securities to match Quicken; pick trade or statement dates; set a transfer account per row |
+| [Quicken Banking Converter](https://ethanpullan.github.io/DollarFin/tools/quicken-banking-converter/) | Wealthsimple activities-export CSVs → Quicken banking import CSV. Pick which accounts to include and name them, set a payee and category once per kind of transaction (remembered on your device), executed or effective dates, several exports combined in date order |
 
 ## About
 

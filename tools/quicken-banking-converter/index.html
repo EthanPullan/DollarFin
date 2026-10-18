@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quicken Banking Converter</title>
+<style>
+  :root{
+    --app-bg:#e9edf0; --panel:#fff; --panel-2:#f4f6f8; --room-bg:#f7f8f6;
+    --ink:#16241f; --muted:#67756f; --line:#d8dee2; --grid-line:rgba(31,61,53,.07);
+    --board:#1f3d35; --board-2:#173029; --board-line:#2c5247;
+    --accent:#e0982e; --accent-soft:#fbe6c8; --accent-deep:#b9781f;
+    --danger:#c43d35; --danger-soft:#f7e0de; --together:#2f6f9f; --together-soft:#dde9f3;
+    --ok:#3f9e6b;
+    --shadow:0 1px 2px rgba(20,40,33,.06),0 6px 18px rgba(20,40,33,.06);
+    --shadow-sm:0 1px 2px rgba(20,40,33,.10); --radius:12px;
+    --sans:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;} html,body{height:100%;}
+  body{margin:0;font-family:var(--sans);color:var(--ink);background:var(--app-bg);
+    -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45;}
+  button{font-family:inherit;}
+  input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink);}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+
+  .app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+  .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.14em;
+    text-transform:uppercase;font-size:13px;white-space:nowrap;}
+  .brand .mark{width:16px;height:16px;border-radius:4px;background:var(--accent);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.06);flex:none;}
+  .brand small{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--muted);font-size:11px;}
+  .spacer{flex:1;}
+
+  .main{flex:1;display:flex;min-height:0;}
+  .panel{width:344px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+    overflow-y:auto;padding:16px;}
+  .stage{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--app-bg);}
+  .stage-scroll{flex:1;overflow:auto;padding:16px;}
+
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 13px;
+    border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;display:inline-flex;
+    align-items:center;gap:7px;transition:background .12s,border-color .12s,transform .05s;}
+  .btn:hover{background:var(--panel-2);} .btn:active{transform:translateY(1px);}
+  .btn.primary{background:var(--board);border-color:var(--board);color:#fff;}
+  .btn.primary:hover{background:var(--board-2);}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;}
+  .btn .ic{font-size:15px;line-height:1;}
+
+  .section + .section{margin-top:18px;}
+  .section-title{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 9px;}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin:6px 0 0;}
+  .field + .field{margin-top:12px;}
+  .field-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 5px;}
+  input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel-2);}
+  input[type=text]:focus{outline:none;border-color:var(--accent);}
+
+  .drop{display:block;border:1px dashed var(--line);border-radius:10px;padding:18px 14px;text-align:center;
+    background:var(--panel-2);color:var(--muted);font-size:12.5px;line-height:1.55;cursor:pointer;
+    transition:border-color .12s,background .12s,color .12s;}
+  .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);}
+  .drop b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px;}
+  .files{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .files:empty{display:none;}
+  .files li{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;
+    border:1px solid var(--line);border-radius:8px;background:#fff;}
+  .files .fname{flex:1;min-width:0;font-family:var(--mono);font-size:11.5px;color:var(--board);word-break:break-all;}
+  .files .fmeta{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .xbtn{border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;
+    line-height:1;padding:2px 4px;border-radius:6px;}
+  .xbtn:hover{color:var(--danger);background:var(--danger-soft);}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .seg button{border:none;background:#fff;padding:6px 12px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
+  .seg button + button{border-left:1px solid var(--line);}
+  .seg button.active{background:var(--board);color:#fff;}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:16px;}
+  .card + .card{margin-top:16px;}
+  .card-head{display:flex;align-items:center;gap:9px;margin-bottom:10px;}
+  .card-head .section-title{margin:0;}
+  .count-pill{font-family:var(--mono);font-size:11px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:20px;padding:2px 9px;color:var(--muted);}
+
+  .empty{border:1px dashed var(--line);border-radius:10px;padding:16px;color:var(--muted);
+    font-size:12.5px;line-height:1.55;background:var(--panel-2);}
+
+  .warn{display:flex;gap:8px;align-items:flex-start;background:var(--accent-soft);color:var(--ink);
+    border-left:3px solid var(--accent);border-radius:8px;padding:9px 11px;font-size:13px;line-height:1.5;}
+  .warn + .warn{margin-top:8px;}
+  .warn .ic{flex:none;color:var(--accent-deep);font-weight:700;}
+  .warn.note{background:var(--together-soft);border-left-color:var(--together);}
+  .warn.note .ic{color:var(--together);}
+
+  .scroll{overflow-x:auto;}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  td{font-family:var(--mono);font-size:12px;}
+  td.num{text-align:right;}
+  td input[type=text]{min-width:150px;padding:4px 7px;font-family:var(--mono);font-size:12px;}
+  td input.missing{border-color:var(--danger);background:var(--danger-soft);}
+  .sec-table td input[type=text]{min-width:120px;width:100%;}
+  .sec-table td:not(:first-child){width:45%;}
+
+  .statusbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:0 16px;min-height:42px;
+    border-top:1px solid var(--line);background:var(--panel);font-size:13px;color:var(--muted);}
+  .statusbar .stat b{font-family:var(--mono);font-weight:600;color:var(--ink);}
+  .statusbar .stat.warn-stat,.statusbar .stat.warn-stat b{color:var(--danger);}
+  .statusbar .dotline{width:1px;height:18px;background:var(--line);}
+  .statusbar .stamp{margin-left:auto;font-size:12px;}
+
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none;}
+  .check input{width:16px;height:16px;accent-color:var(--board);margin:0;}
+  .acct{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:#fff;}
+  .acct + .acct{margin-top:8px;}
+  .acct .acct-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+  .acct .acct-id{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;}
+  .acct.off input[type=text]{opacity:.5;}
+  .linkbtn{border:none;background:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;}
+  .linkbtn:hover{color:var(--danger);}
+  .hidden{display:none !important;}
+
+  @media (max-width:880px){
+    .app{height:auto;min-height:100vh;}
+    .main{flex-direction:column;}
+    .panel{width:100%;border-right:none;border-bottom:1px solid var(--line);}
+    .brand{white-space:normal;flex-wrap:wrap;}
+  }
+  @media (prefers-reduced-motion:reduce){ .btn:active{transform:none;} *{scroll-behavior:auto;} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="toolbar">
+    <div class="brand"><span class="mark"></span>Quicken Banking Converter <small>Wealthsimple activities → Quicken CSV</small></div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download Quicken CSV</button>
+  </header>
+
+  <div class="main">
+    <aside class="panel">
+      <section class="section">
+        <h2 class="section-title">1 · Activity exports</h2>
+        <label class="drop" id="drop" for="file">
+          <b>Drop activities-export CSVs here</b>or click to choose — pick several at once, or add more later
+        </label>
+        <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
+        <ul class="files" id="fileList"></ul>
+        <p class="hint">Exports are combined in date order; rows repeated across overlapping exports are kept once. Runs entirely in your browser — files are never uploaded.</p>
+      </section>
+
+      <section class="section hidden" id="acctSection">
+        <h2 class="section-title">2 · Accounts</h2>
+        <div id="accounts"></div>
+        <p class="hint">Name each account as it appears in Quicken. Investment accounts start unticked — use the Quicken Investment Converter for those.</p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title" id="dateTitle">3 · Transaction date</h2>
+        <div class="seg" id="dateMode" role="group" aria-label="Transaction date">
+          <button type="button" data-v="executed" class="active">Executed date</button>
+          <button type="button" data-v="effective">Effective date</button>
+        </div>
+        <p class="hint">Executed date is the "executed at" date in the description — the same date the investment converter uses, so transfers between accounts line up.</p>
+      </section>
+
+      <section class="section">
+        <p class="hint" style="margin:0">Account names, payees and categories are remembered on this device only.
+          <button type="button" class="linkbtn" id="forget">Forget them</button></p>
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-scroll">
+        <div class="empty" id="emptyState">Choose one or more Wealthsimple activities-export CSVs on the left to preview the Quicken import.</div>
+
+        <div class="card hidden" id="warnSection">
+          <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
+          <div id="warnings"></div>
+        </div>
+
+        <div class="card hidden" id="kindSection">
+          <div class="card-head"><h2 class="section-title">Payees &amp; categories</h2></div>
+          <p class="hint" style="margin:0 0 9px">Set once per kind of transaction. Categories should match ones that exist in Quicken; leave blank to categorise after import.</p>
+          <div class="scroll"><table class="sec-table" id="kindTable"></table></div>
+        </div>
+
+        <div class="card hidden" id="previewSection">
+          <div class="card-head">
+            <h2 class="section-title">Preview</h2>
+            <span class="count-pill" id="count">0</span>
+          </div>
+          <div class="scroll"><table id="preview"></table></div>
+        </div>
+      </div>
+
+      <footer class="statusbar">
+        <span class="stat"><b id="stFiles">0</b> exports</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stTx">0</b> transactions</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stNet">0.00</b> net</span>
+        <span class="stamp" id="stReady">Waiting for an export</span>
+      </footer>
+    </section>
+  </div>
+</div>
+
+<script id="core">
+/* ===== core logic (DOM-free so it can be tested — see the .test.js beside this file) ===== */
+// Header copied verbatim from Quicken's banking import sample.
+const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum';
+const FIELDS = ['date','payee','fipayee','amount','debitCredit','category','account','tag','memo','chknum'];
+
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { f += '"'; i++; } else q = false; }
+      else f += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i+1] === '\n') i++;
+      row.push(f); f = '';
+      if (row.some(x => x !== '')) rows.push(row);
+      row = [];
+    } else f += c;
+  }
+  row.push(f);
+  if (row.some(x => x !== '')) rows.push(row);
+  return rows;
+}
+
+function toObjects(rows) {
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  return rows.slice(1).map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] ?? '').trim()])));
+}
+
+function csvField(v) {
+  v = v == null ? '' : String(v);
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
+const EXEC_RE = /executed at (\d{4}-\d{2}-\d{2})/i;
+const cleanDesc = d => d.replace(/\s*\(executed at.*\)\s*$/i, '').trim();
+const isCashAccount = type => /chequing|checking|cash|saving/i.test(type || '');
+
+// Friendly default payee per kind; anything else falls back to the description.
+function defaultPayee(subType, dir, desc) {
+  if (subType === 'AFT_IN') return 'Direct deposit';
+  if (/^TRANSFER/.test(subType)) return dir === 'out' ? 'Transfer out' : 'Transfer in';
+  if (/^interest/i.test(desc)) return 'Interest';
+  return desc;
+}
+
+// Returns { items, warnings }. Every row with cash is a banking transaction; rows with a
+// symbol are trades and are left to the investment converter.
+function convert(objs) {
+  const items = [], warnings = [];
+  if (!objs.length || !('net_cash_amount' in objs[0]) || !('effective_date' in objs[0])) {
+    warnings.push('This doesn\'t look like a Wealthsimple activities export (no effective_date / net_cash_amount columns), file skipped.');
+    return { items, warnings };
+  }
+  let trades = 0;
+  objs.forEach((o, idx) => {
+    const line = idx + 2;
+    if (o.symbol) { trades++; return; }
+    const amt = parseFloat(o.net_cash_amount.replace(/,/g, ''));
+    if (!Number.isFinite(amt)) { warnings.push(`Line ${line}: no cash amount, row skipped.`); return; }
+    const desc = cleanDesc(o.description || '');
+    const dir = amt < 0 ? 'out' : 'in';
+    const sub = o.activity_sub_type && o.activity_sub_type !== '-' ? o.activity_sub_type : '';
+    items.push({
+      id: idx, line, amt, desc,
+      effDate: o.effective_date,
+      execDate: ((o.description || '').match(EXEC_RE) || [])[1] || o.effective_date,
+      accountId: o.account_id, accountType: o.account_type,
+      kind: [o.activity_type, sub, dir].join('|'),
+      kindLabel: desc || [o.activity_type, sub].filter(Boolean).join(' '),
+      kindDetail: [o.activity_type, sub].filter(Boolean).join(' / '),
+      defaultPayee: defaultPayee(sub, dir, desc),
+      key: Object.values(o).join('|'),
+    });
+  });
+  if (trades) warnings.push(`${trades} trade row(s) with a security symbol skipped — use the Quicken Investment Converter for those.`);
+  return { items, warnings };
+}
+
+// files: [{ id, name, objs }]. Joins exports oldest first. A row repeated in another file
+// (overlapping exports) is dropped; repeats within one file are real (two identical deposits).
+function combine(files) {
+  const items = [], warnings = [], seen = new Map();
+  let dupes = 0;
+  const converted = files.map(f => ({ f, res: convert(f.objs) }));
+  const first = c => c.res.items.reduce((m, i) => i.effDate < m ? i.effDate : m, '￿');
+  converted.sort((a, b) => first(a) < first(b) ? -1 : first(a) > first(b) ? 1 : 0);
+  converted.forEach(({ f, res }) => {
+    res.warnings.forEach(w => warnings.push(files.length > 1 ? `${f.name} — ${w}` : w));
+    res.items.forEach(it => {
+      const owner = seen.get(it.key);
+      if (owner !== undefined && owner !== f.id) { dupes++; return; }
+      seen.set(it.key, f.id);
+      items.push({ ...it, id: f.id + ':' + it.id, file: f.name });
+    });
+  });
+  if (dupes)
+    warnings.push(`${dupes} row(s) appeared in more than one export and were included once. Check the date ranges overlap as you expect.`);
+  return { items, warnings };
+}
+
+// "2026-01-31" → "01/31/2026" (the format in Quicken's banking sample)
+const usDate = iso => { const [y, m, d] = iso.split('-'); return `${m}/${d}/${y}`; };
+
+// opts: { dateMode, accounts: { [accountId]: { name, include } }, kinds: { [kind]: { payee, category } } }
+function buildOutput(items, opts) {
+  return items
+    .filter(it => (opts.accounts[it.accountId] || {}).include)
+    .map(it => ({ it, iso: opts.dateMode === 'effective' ? it.effDate : it.execDate }))
+    .sort((a, b) => a.iso < b.iso ? -1 : a.iso > b.iso ? 1 : 0)   // stable: same-day rows keep export order
+    .map(({ it, iso }) => {
+      const k = opts.kinds[it.kind] || {};
+      const r = Object.fromEntries(FIELDS.map(h => [h, '']));
+      r.date = usDate(iso);
+      r.payee = (k.payee ?? it.defaultPayee).trim();
+      r.amount = it.amt.toFixed(2);
+      r.category = (k.category || '').trim();
+      r.account = (opts.accounts[it.accountId].name || '').trim();
+      r.memo = it.desc;
+      r._id = it.id;
+      return r;
+    });
+}
+
+function toCSV(rows) {
+  return [HEADER_LINE].concat(rows.map(r => FIELDS.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
+}
+</script>
+
+<script>
+/* ===== UI ===== */
+(function(){
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const LS = 'dollarfin:quicken-banking:settings';
+
+  // Remembered on this device only: { dateMode, accounts:{id:{name,include}}, kinds:{kind:{payee,category}} }
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {}
+  const accounts = saved.accounts || {};
+  const kinds = saved.kinds || {};
+  let dateMode = saved.dateMode === 'effective' ? 'effective' : 'executed';
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds })); } catch (e) {} };
+
+  let items = [], files = [], nextFileId = 1;
+
+  async function addFiles(list) {
+    const empty = [];
+    for (const f of list) {
+      const rows = parseCSV(await f.text());
+      if (rows.length < 2) { empty.push(f.name); continue; }
+      const entry = { id: nextFileId++, name: f.name, objs: toObjects(rows) };
+      const i = files.findIndex(x => x.name === f.name);
+      if (i >= 0) files[i] = entry; else files.push(entry);
+    }
+    if (empty.length) alert('Skipped (looks empty): ' + empty.join(', '));
+    const firstDate = f => f.objs.reduce((m, o) => (o.effective_date || '￿') < m ? o.effective_date : m, '￿');
+    files.sort((a, b) => firstDate(a) < firstDate(b) ? -1 : firstDate(a) > firstDate(b) ? 1 : 0);
+    refresh();
+  }
+
+  function refresh() {
+    const res = combine(files);
+    items = res.items;
+
+    const counts = {};
+    items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
+    $('fileList').innerHTML = files.map(f => `<li><span class="fname">${esc(f.name)}</span>
+      <span class="fmeta">${counts[f.name] || 0}</span>
+      <button class="xbtn" data-id="${f.id}" title="Remove" aria-label="Remove ${esc(f.name)}">×</button></li>`).join('');
+    $('fileList').querySelectorAll('.xbtn').forEach(b => b.addEventListener('click', () => {
+      files = files.filter(f => f.id !== Number(b.dataset.id)); refresh();
+    }));
+    $('stFiles').textContent = files.length;
+    $('emptyState').classList.toggle('hidden', files.length > 0);
+    $('previewSection').classList.toggle('hidden', !files.length);
+    $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('');
+    $('warnSection').classList.toggle('hidden', !res.warnings.length);
+
+    // Accounts seen in the exports; new ones get a default name and are ticked only if they hold cash.
+    const accts = new Map();
+    items.forEach(i => { if (!accts.has(i.accountId)) accts.set(i.accountId, i.accountType); });
+    accts.forEach((type, id) => { accounts[id] ||= { name: type || 'Wealthsimple', include: isCashAccount(type) }; });
+    $('accounts').innerHTML = [...accts].map(([id, type]) => `<div class="acct${accounts[id].include ? '' : ' off'}">
+        <div class="acct-head"><label class="check"><input type="checkbox" data-a="${esc(id)}" ${accounts[id].include ? 'checked' : ''}>${esc(type || 'Account')}</label>
+          <span class="acct-id">${esc(id)}</span></div>
+        <input type="text" data-a="${esc(id)}" value="${esc(accounts[id].name)}" placeholder="Quicken account name" aria-label="Quicken account name for ${esc(id)}">
+      </div>`).join('');
+    $('acctSection').classList.toggle('hidden', accts.size === 0);
+    $('dateTitle').textContent = (accts.size ? '3' : '2') + ' · Transaction date';
+    $('accounts').querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {
+      accounts[cb.dataset.a].include = cb.checked; cb.closest('.acct').classList.toggle('off', !cb.checked); save(); render();
+    }));
+    $('accounts').querySelectorAll('input[type=text]').forEach(inp => inp.addEventListener('input', () => {
+      accounts[inp.dataset.a].name = inp.value; save(); render();
+    }));
+
+    // One row per kind of transaction.
+    const ks = new Map();
+    items.forEach(i => { const k = ks.get(i.kind); if (k) k.n++; else ks.set(i.kind, { n: 1, it: i }); });
+    $('kindTable').innerHTML = '<tr><th>Transaction</th><th>Rows</th><th>Payee</th><th>Category</th></tr>' +
+      [...ks].map(([kind, { n, it }]) => `<tr><td title="${esc(it.kindDetail)}">${esc(it.kindLabel)}${it.kindDetail ? ` <span class="fmeta">${esc(it.kindDetail)}</span>` : ''}</td>
+        <td class="num">${n}</td>
+        <td><input type="text" data-k="${esc(kind)}" data-f="payee" value="${esc(kinds[kind]?.payee ?? it.defaultPayee)}"></td>
+        <td><input type="text" data-k="${esc(kind)}" data-f="category" value="${esc(kinds[kind]?.category ?? '')}" placeholder="e.g. Interest Inc"></td></tr>`).join('');
+    $('kindSection').classList.toggle('hidden', ks.size === 0);
+    $('kindTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      (kinds[inp.dataset.k] ||= {})[inp.dataset.f] = inp.value; save(); render();
+    }));
+    render();
+  }
+
+  const current = () => buildOutput(items, { dateMode, accounts, kinds });
+
+  function render() {
+    const rows = current();
+    const cols = ['date','payee','amount','category','account','memo'];
+    $('preview').innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
+      rows.map(r => '<tr>' + cols.map(c => `<td${c === 'amount' ? ' class="num"' : ''}>${esc(r[c])}</td>`).join('') + '</tr>').join('');
+    $('count').textContent = rows.length + (rows.length === 1 ? ' transaction' : ' transactions');
+    $('stTx').textContent = rows.length;
+    $('stNet').textContent = rows.reduce((s, r) => s + Number(r.amount), 0).toFixed(2);
+    const unnamed = rows.some(r => !r.account);
+    const ok = rows.length && !unnamed;
+    $('dl').disabled = !ok;
+    const why = !files.length ? 'Waiting for an export' : !rows.length ? 'Tick at least one account'
+      : unnamed ? 'Give every ticked account a Quicken name' : 'Ready to download';
+    $('dl').title = ok ? '' : why;
+    $('stReady').textContent = why;
+  }
+
+  $('dateMode').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.v === dateMode);
+    b.addEventListener('click', () => {
+      dateMode = b.dataset.v;
+      $('dateMode').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+      save(); render();
+    });
+  });
+
+  $('forget').addEventListener('click', () => {
+    if (!confirm('Forget the saved account names, payees and categories on this device?')) return;
+    try { localStorage.removeItem(LS); } catch (e) {}
+    [accounts, kinds].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+    refresh();
+  });
+
+  $('dl').addEventListener('click', () => {
+    const rows = current();
+    const blob = new Blob([toCSV(rows)], { type: 'text/csv' });
+    const a = document.createElement('a');
+    const iso = d => d.replace(/(\d+)\/(\d+)\/(\d+)/, '$3-$1-$2');
+    a.href = URL.createObjectURL(blob);
+    a.download = `quicken-banking-${iso(rows[0].date)}-to-${iso(rows[rows.length - 1].date)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
+  ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+  $('drop').addEventListener('drop', e => addFiles([...e.dataTransfer.files]));
+})();
+</script>
+</body>
+</html>
