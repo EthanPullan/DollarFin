@@ -394,6 +394,11 @@ function combine(files) {
   });
   if (dupes)
     warnings.push(`${dupes} row(s) appeared in more than one export and were included once. Check the date ranges overlap as you expect.`);
+  // The overlap check only catches identical rows, and the two formats never produce identical rows.
+  const formats = {};
+  items.forEach(it => { (formats[it.accountId] ||= new Set()).add(it.kind.startsWith('Statement|') ? 'statement' : 'activities'); });
+  Object.entries(formats).forEach(([id, f]) => { if (f.size > 1)
+    warnings.push(`Account ${id} is in both an activities export and a monthly statement — any dates they share will be imported twice. Use one format per account.`); });
   return { items, warnings };
 }
 

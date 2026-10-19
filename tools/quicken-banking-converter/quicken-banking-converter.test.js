@@ -167,3 +167,12 @@ test('a cash account monthly statement: account from the filename, kinds by code
   const trades = Q.convert(st('"2026-03-02","BUY","XYZ - Example ETF: Bought 1 shares at $10.00 per share","-10.0","0.0","CAD"'), name);
   assert.match(trades.warnings[0], /use the Quicken Investment Converter/);
 });
+
+test('warns when one account comes from both an activities export and a monthly statement', () => {
+  const st = Q.toObjects(Q.parseCSV('"date","transaction","description","amount","balance","currency"\n"2026-01-05","INT","Interest earned","0.03","10.03","CAD"'));
+  const act = exp(ROWS[0].replace('ACC1', 'AB12CD34CAD'));
+  const { warnings } = Q.combine([{ id: 1, name: 'a.csv', objs: act },
+    { id: 2, name: 'Chq-monthly-statement-transactions-AB12CD34CAD-2026-01-01.csv', objs: st }]);
+  assert.ok(warnings.some(w => /AB12CD34CAD is in both an activities export and a monthly statement/.test(w)));
+  assert.ok(!Q.combine([{ id: 1, name: 'a.csv', objs: exp(ROWS[0]) }]).warnings.length);
+});
