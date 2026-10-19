@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GnuCash to Quicken</title>
+<style>
+  :root{
+    --app-bg:#e9edf0; --panel:#fff; --panel-2:#f4f6f8; --room-bg:#f7f8f6;
+    --ink:#16241f; --muted:#67756f; --line:#d8dee2; --grid-line:rgba(31,61,53,.07);
+    --board:#1f3d35; --board-2:#173029; --board-line:#2c5247;
+    --accent:#e0982e; --accent-soft:#fbe6c8; --accent-deep:#b9781f;
+    --danger:#c43d35; --danger-soft:#f7e0de; --together:#2f6f9f; --together-soft:#dde9f3;
+    --ok:#3f9e6b;
+    --shadow:0 1px 2px rgba(20,40,33,.06),0 6px 18px rgba(20,40,33,.06);
+    --shadow-sm:0 1px 2px rgba(20,40,33,.10); --radius:12px;
+    --sans:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;} html,body{height:100%;}
+  body{margin:0;font-family:var(--sans);color:var(--ink);background:var(--app-bg);
+    -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45;}
+  button{font-family:inherit;}
+  input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink);}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+
+  .app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+  .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.14em;
+    text-transform:uppercase;font-size:13px;white-space:nowrap;}
+  .brand .mark{width:16px;height:16px;border-radius:4px;background:var(--accent);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.06);flex:none;}
+  .brand small{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--muted);font-size:11px;}
+  .spacer{flex:1;}
+
+  .main{flex:1;display:flex;min-height:0;}
+  .panel{width:344px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+    overflow-y:auto;padding:16px;}
+  .stage{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--app-bg);}
+  .stage-scroll{flex:1;overflow:auto;padding:16px;}
+
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 13px;
+    border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;display:inline-flex;
+    align-items:center;gap:7px;transition:background .12s,border-color .12s,transform .05s;}
+  .btn:hover{background:var(--panel-2);} .btn:active{transform:translateY(1px);}
+  .btn.primary{background:var(--board);border-color:var(--board);color:#fff;}
+  .btn.primary:hover{background:var(--board-2);}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;}
+  .btn .ic{font-size:15px;line-height:1;}
+
+  .section + .section{margin-top:18px;}
+  .section-title{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 9px;}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin:6px 0 0;}
+  .field + .field{margin-top:12px;}
+  .field-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 5px;}
+  input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel-2);}
+  input[type=text]:focus{outline:none;border-color:var(--accent);}
+
+  .drop{display:block;border:1px dashed var(--line);border-radius:10px;padding:18px 14px;text-align:center;
+    background:var(--panel-2);color:var(--muted);font-size:12.5px;line-height:1.55;cursor:pointer;
+    transition:border-color .12s,background .12s,color .12s;}
+  .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);}
+  .drop b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px;}
+  .files{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .files:empty{display:none;}
+  .files li{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;
+    border:1px solid var(--line);border-radius:8px;background:#fff;}
+  .files .fname{flex:1;min-width:0;font-family:var(--mono);font-size:11.5px;color:var(--board);word-break:break-all;}
+  .files .fmeta{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .xbtn{border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;
+    line-height:1;padding:2px 4px;border-radius:6px;}
+  .xbtn:hover{color:var(--danger);background:var(--danger-soft);}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .seg button{border:none;background:#fff;padding:6px 12px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
+  .seg button + button{border-left:1px solid var(--line);}
+  .seg button.active{background:var(--board);color:#fff;}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:16px;}
+  .card + .card{margin-top:16px;}
+  .card-head{display:flex;align-items:center;gap:9px;margin-bottom:10px;}
+  .card-head .section-title{margin:0;}
+  .count-pill{font-family:var(--mono);font-size:11px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:20px;padding:2px 9px;color:var(--muted);}
+
+  .empty{border:1px dashed var(--line);border-radius:10px;padding:16px;color:var(--muted);
+    font-size:12.5px;line-height:1.55;background:var(--panel-2);}
+
+  .warn{display:flex;gap:8px;align-items:flex-start;background:var(--accent-soft);color:var(--ink);
+    border-left:3px solid var(--accent);border-radius:8px;padding:9px 11px;font-size:13px;line-height:1.5;}
+  .warn + .warn{margin-top:8px;}
+  .warn .ic{flex:none;color:var(--accent-deep);font-weight:700;}
+  .warn.note{background:var(--together-soft);border-left-color:var(--together);}
+  .warn.note .ic{color:var(--together);}
+
+  .scroll{overflow-x:auto;}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  td{font-family:var(--mono);font-size:12px;}
+  td.num{text-align:right;}
+  td input[type=text]{min-width:150px;padding:4px 7px;font-family:var(--mono);font-size:12px;}
+  td input.missing{border-color:var(--danger);background:var(--danger-soft);}
+  .sec-table td input[type=text]{min-width:120px;width:100%;}
+  .sec-table td:not(:first-child){width:45%;}
+
+  .statusbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:0 16px;min-height:42px;
+    border-top:1px solid var(--line);background:var(--panel);font-size:13px;color:var(--muted);}
+  .statusbar .stat b{font-family:var(--mono);font-weight:600;color:var(--ink);}
+  .statusbar .stat.warn-stat,.statusbar .stat.warn-stat b{color:var(--danger);}
+  .statusbar .dotline{width:1px;height:18px;background:var(--line);}
+  .statusbar .stamp{margin-left:auto;font-size:12px;}
+
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none;}
+  .check input{width:16px;height:16px;accent-color:var(--board);margin:0;}
+  .acct{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:#fff;}
+  .acct + .acct{margin-top:8px;}
+  .acct .acct-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+  .acct .acct-id{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;}
+  .acct.off input[type=text]{opacity:.5;}
+  .linkbtn{border:none;background:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;}
+  .linkbtn:hover{color:var(--danger);}
+  select{width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--panel-2);font-size:13px;}
+  select:focus{outline:none;border-color:var(--accent);}
+  .qk-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px;}
+  .qk-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  .qk-grid .qk-wide{grid-column:1 / -1;}
+  .flow{display:flex;gap:2px;height:14px;border-radius:7px;overflow:hidden;background:var(--panel-2);}
+  .flow-seg{min-width:5px;}
+  .flow-legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:10px;}
+  .flow-key{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:20px;
+    padding:4px 10px;font-size:12.5px;cursor:pointer;color:var(--ink);}
+  .flow-key:hover{background:var(--panel-2);}
+  .flow-key b{font-family:var(--mono);font-weight:600;}
+  .flow-key.active{border-color:var(--board);box-shadow:inset 0 0 0 1px var(--board);}
+  .flow-key[disabled]{cursor:default;color:var(--muted);background:#fff;}
+  .flow-key .sw{width:10px;height:10px;border-radius:3px;flex:none;}
+  .tl{display:block;width:100%;height:104px;margin-top:12px;overflow:visible;}
+  .tl text{font:11px var(--sans);fill:var(--muted);}
+  .tl text.lane{font-weight:600;fill:var(--ink);}
+  .tl-band{fill:var(--panel-2);stroke:var(--line);}
+  .tl-tick{stroke:var(--grid-line);}
+  .tl-link{stroke:var(--accent);stroke-width:1.2;opacity:.75;}
+  .tl-link.kept{stroke-dasharray:3 3;}
+  .tl circle{stroke:#fff;stroke-width:1;}
+  .tl .d-new{fill:var(--board);} .tl .d-quicken,.tl .d-q{fill:var(--accent);} .tl .d-kept{fill:var(--board);stroke:var(--accent);stroke-width:2;}
+  .tl .d-only{fill:#b4bdb9;}
+  .chip{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:2px 8px;font-family:var(--sans);
+    font-size:11.5px;font-weight:600;white-space:nowrap;}
+  .chip.new,.chip.kept{background:#e2f0e8;color:#245c3d;}
+  .chip.q{background:var(--accent-soft);color:#7a4c0f;}
+  .chip.rep{background:var(--together-soft);color:var(--together);}
+  .chip input{width:14px;height:14px;margin:0;accent-color:var(--board);}
+  .why{font-family:var(--sans);font-size:11.5px;color:var(--muted);margin-top:3px;white-space:normal;min-width:180px;max-width:260px;}
+  tr.left-out td{color:var(--muted);}
+  tr.left-out td:not(:first-child){text-decoration:line-through;text-decoration-color:rgba(103,117,111,.55);}
+  tr.st-new td:first-child,tr.st-kept td:first-child{box-shadow:inset 3px 0 0 var(--board);}
+  tr.st-quicken td{background:#fdf5e8;} tr.st-quicken td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
+  tr.st-repeat td{background:#eef4f9;} tr.st-repeat td:first-child{box-shadow:inset 3px 0 0 var(--together);}
+  /* GnuCash paths are long: the path gets its own line, and the category column more room. */
+  .acct .acct-head{flex-wrap:wrap;}
+  .acct .acct-id{margin-left:0;flex-basis:100%;word-break:break-all;}
+  #kindTable td:nth-child(2){width:1%;}
+  #kindTable td:nth-child(3){width:42%;}
+  #kindTable td:first-child{white-space:normal;}
+  .hidden{display:none !important;}
+
+  @media (max-width:880px){
+    .app{height:auto;min-height:100vh;}
+    .main{flex-direction:column;}
+    .panel{width:100%;border-right:none;border-bottom:1px solid var(--line);}
+    .brand{white-space:normal;flex-wrap:wrap;}
+  }
+  @media (prefers-reduced-motion:reduce){ .btn:active{transform:none;} *{scroll-behavior:auto;} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="toolbar">
+    <div class="brand"><span class="mark"></span>GnuCash to Quicken <small>GnuCash transaction exports → Quicken CSV</small></div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download Quicken CSV</button>
+  </header>
+
+  <div class="main">
+    <aside class="panel">
+      <section class="section">
+        <h2 class="section-title">1 · GnuCash exports</h2>
+        <label class="drop" id="drop" for="file">
+          <b>Drop GnuCash CSVs here</b>one transaction export per account (File › Export › Export Transactions to CSV) — pick several at once
+        </label>
+        <input id="file" type="file" accept=".csv,.txt,text/csv" multiple hidden>
+        <ul class="files" id="fileList"></ul>
+        <p class="hint">Exports are combined in date order; a transaction in two overlapping exports of the same account is kept once (by its GnuCash Transaction ID). Runs entirely in your browser — files are never uploaded.</p>
+      </section>
+
+      <section class="section hidden" id="acctSection">
+        <h2 class="section-title">2 · Accounts</h2>
+        <div id="accounts"></div>
+        <p class="hint">Each file is matched to the GnuCash account it was exported for (shown under the box). Name each as it appears in Quicken.</p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title" id="dateTitle">3 · Date format</h2>
+        <label class="field-label" for="dateFmt">Date format in the file</label>
+        <select id="dateFmt">
+          <option value="ymd">YYYY-MM-DD (works in Quicken Canada)</option>
+          <option value="mdy">MM/DD/YYYY (Quicken's help page)</option>
+          <option value="dmy">DD/MM/YYYY</option>
+        </select>
+        <p class="hint">If Quicken rejects the file, pick the format your Windows short date uses.</p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Already in Quicken <span style="text-transform:none;letter-spacing:0;font-weight:500">· optional</span></h2>
+        <label class="drop" id="qkDrop" for="qkFile">
+          <b>Drop a Quicken export here</b>a QIF export (File › Export › QIF File) or a CSV transaction report
+        </label>
+        <input id="qkFile" type="file" accept=".qif,.csv,.txt,text/csv" hidden>
+        <div id="qkInfo" class="hidden">
+          <ul class="files"><li><span class="fname" id="qkName"></span><span class="fmeta" id="qkCount"></span>
+            <button type="button" class="xbtn" id="qkClear" title="Remove" aria-label="Remove the Quicken export">×</button></li></ul>
+          <div class="qk-grid">
+            <div id="qkCols" class="qk-wide qk-grid" style="margin:0">
+              <label>Date column<select id="qkDate"></select></label>
+              <label>Amount<select id="qkAmount"></select></label>
+              <label>Date order<select id="qkOrder"></select></label>
+            </div>
+            <label>Match within<select id="qkDays">
+              <option value="0">Same day</option><option value="1">1 day</option><option value="2">2 days</option>
+              <option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></label>
+            <label id="qkAccountWrap" class="qk-wide">Quicken account<select id="qkAccount"></select></label>
+          </div>
+          <p class="hint">Rows with the same amount as a transaction in the export, within these days, are left out of the download — they're marked in amber in the preview, with a tick box to keep any of them.</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="hint" style="margin:0">Account names, categories and the lists from your Quicken export are remembered on this device only.
+          <button type="button" class="linkbtn" id="forget">Forget them</button></p>
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-scroll">
+        <div class="empty" id="emptyState">Choose GnuCash transaction exports (CSV, one per account) on the left to preview the Quicken import.</div>
+
+        <div class="card hidden" id="warnSection">
+          <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
+          <div id="warnings"></div>
+        </div>
+
+        <div class="card hidden" id="flowSection">
+          <div class="card-head">
+            <h2 class="section-title">What happens to your rows</h2>
+            <span class="count-pill" id="flowTotal">0</span>
+          </div>
+          <div class="flow" id="flowBar" aria-hidden="true"></div>
+          <div class="flow-legend" id="flowLegend"></div>
+          <svg class="tl hidden" id="timeline" role="img"></svg>
+          <p class="hint" id="flowNote"></p>
+        </div>
+
+        <div class="card hidden" id="kindSection">
+          <div class="card-head"><h2 class="section-title">Categories</h2></div>
+          <p class="hint" style="margin:0 0 9px">One row per GnuCash account the money came from or went to. Pick the matching Quicken category.
+            Transfers between your own accounts are marked: Quicken's CSV import can't create transfers, so leave those blank (or pick a category) and import each account's file.
+            <span id="catHint"></span></p>
+          <div class="scroll"><table class="sec-table" id="kindTable"></table></div>
+          <datalist id="catList"></datalist><datalist id="acctList"></datalist>
+        </div>
+
+        <div class="card hidden" id="previewSection">
+          <div class="card-head">
+            <h2 class="section-title">Preview</h2>
+            <span class="count-pill" id="count">0</span>
+          </div>
+          <div class="scroll"><table id="preview"></table></div>
+        </div>
+      </div>
+
+      <footer class="statusbar">
+        <span class="stat"><b id="stFiles">0</b> exports</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stTx">0</b> transactions</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stNet">0.00</b> net</span>
+        <span class="dotline"></span>
+        <span class="stat"><b id="stSkip">0</b> already in Quicken</span>
+        <span class="stamp" id="stReady">Waiting for an export</span>
+      </footer>
+    </section>
+  </div>
+</div>
+
+<script id="core">
+/* ===== core logic (DOM-free so it can be tested — see the .test.js beside this file) ===== */
+// The 10 columns from Quicken's help page, in its order (one Debit/Credit column, left blank; the amount
+// is signed). Confirmed by a test import into Quicken Canada; the 11-column in-app sample (separate debit
+// and credit) shifts the fields and imports nothing.
+const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum';
+const FIELDS = ['date','payee','fipayee','amount','debitCredit','category','account','tag','memo','chknum'];
+
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { f += '"'; i++; } else q = false; }
+      else f += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i+1] === '\n') i++;
+      row.push(f); f = '';
+      if (row.some(x => x !== '')) rows.push(row);
+      row = [];
+    } else f += c;
+  }
+  row.push(f);
+  if (row.some(x => x !== '')) rows.push(row);
+  return rows;
+}
+
+function toObjects(rows) {
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  return rows.slice(1).map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] ?? '').trim()])));
+}
+
+function csvField(v) {
+  v = v == null ? '' : String(v);
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
+const collapse = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+const gncNum = s => parseFloat(String(s ?? '').replace(/,/g, ''));
+const isTransferAccount = full => /^(Assets|Liabilities|Equity)(:|$)/i.test(full || '');
+const isImbalance = full => /^(Imbalance|Orphan)-/i.test(full || '');
+const GNC_COLS = ['date', 'transaction id', 'full account name', 'amount num.'];
+
+// Default Quicken category for a GnuCash account: Income/Expenses paths lose their top level
+// ("Expenses:Auto:Auto Insurance" → "Auto:Auto Insurance"), matched to the Quicken category list when one
+// is known (whole path, else a unique match on the last part). Transfers and imbalance entries: blank.
+function defaultCategory(full, quickenCats = []) {
+  if (!full || full === 'Split' || isTransferAccount(full) || isImbalance(full)) return '';
+  const path = full.split(':').slice(1).join(':') || full;
+  const lc = s => s.toLowerCase(), exact = quickenCats.find(c => lc(c) === lc(path));
+  if (exact) return exact;
+  const leaf = lc(path.split(':').pop()), byLeaf = quickenCats.filter(c => lc(c.split(':').pop()) === leaf);
+  return byLeaf.length === 1 ? byLeaf[0] : path;
+}
+
+// GnuCash "Export Transactions to CSV": one row per split, grouped by Transaction ID. The file's own
+// account is the one that appears in every transaction; its splits become the rows, and the other
+// splits say where the money went (a category) or which account it moved to (a transfer).
+function convert(objs, name = '') {
+  const items = [], warnings = [];
+  if (!objs.length || !GNC_COLS.every(k => k in objs[0])) {
+    warnings.push('This doesn\'t look like a GnuCash transaction export (needs Date, Transaction ID, Full Account Name and Amount Num. columns), file skipped.');
+    return { items, warnings };
+  }
+  const order = detectDateOrder(objs.map(o => o.date));
+  const isoOf = d => /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : toIsoDate(d, order || 'mdy');
+  const txns = new Map();
+  objs.forEach((o, idx) => { if (o['transaction id']) (txns.get(o['transaction id']) || txns.set(o['transaction id'], []).get(o['transaction id'])).push({ o, line: idx + 2 }); });
+  const inTxns = new Map();
+  txns.forEach(splits => new Set(splits.map(s => s.o['full account name'])).forEach(a => inTxns.set(a, (inTxns.get(a) || 0) + 1)));
+  const [target] = [...inTxns].sort((a, b) => b[1] - a[1] || isTransferAccount(b[0]) - isTransferAccount(a[0]))[0] || [];
+  let missing = 0;
+  txns.forEach((splits, id) => {
+    const mine = splits.filter(s => s.o['full account name'] === target), others = splits.filter(s => s.o['full account name'] !== target);
+    if (!mine.length) { missing++; return; }
+    const other = others.length === 1 ? others[0].o['full account name'] : others.length ? 'Split' : '';
+    const splitNote = others.length > 1 ? 'Split: ' + others.map(x => `${x.o['account name'] || x.o['full account name']} ${(-gncNum(x.o['amount num.'])).toFixed(2)}`).join('; ') : '';
+    mine.forEach((s, k) => {
+      const o = s.o, amt = gncNum(o['amount num.']), iso = isoOf(o.date);
+      if (!Number.isFinite(amt) || !iso) { warnings.push(`Line ${s.line}: no readable ${iso ? 'amount' : 'date'}, row skipped.`); return; }
+      items.push({
+        id: id + '#' + k, line: s.line, amt, desc: collapse(o.description), memo: collapse(o.memo), num: collapse(o.number),
+        effDate: iso, accountId: target, accountType: o['account name'] || target.split(':').pop(),
+        kind: other, kindLabel: other || '(no other side)', transfer: isTransferAccount(other), splitNote,
+        key: id + '|' + target + '|' + k,
+      });
+    });
+  });
+  if (missing) warnings.push(`${missing} transaction(s) don't involve ${target} and were skipped — export one account per file.`);
+  return { items, warnings };
+}
+
+// files: [{ id, name, objs }]. Joins exports oldest first. A row repeated in another file
+// (overlapping exports of the same account — same Transaction ID) is dropped (returned in `dropped`).
+function combine(files) {
+  const items = [], warnings = [], dropped = [], seen = new Map();
+  let dupes = 0;
+  const converted = files.map(f => ({ f, res: convert(f.objs, f.name) }));
+  const first = c => c.res.items.reduce((m, i) => i.effDate < m ? i.effDate : m, '￿');
+  converted.sort((a, b) => first(a) < first(b) ? -1 : first(a) > first(b) ? 1 : 0);
+  converted.forEach(({ f, res }) => {
+    res.warnings.forEach(w => warnings.push(files.length > 1 ? `${f.name} — ${w}` : w));
+    res.items.forEach(it => {
+      const owner = seen.get(it.key);
+      if (owner !== undefined && owner.id !== f.id) {
+        dupes++; dropped.push({ ...it, id: f.id + ':' + it.id, file: f.name, dupOf: owner.name }); return;
+      }
+      seen.set(it.key, { id: f.id, name: f.name });
+      items.push({ ...it, id: f.id + ':' + it.id, file: f.name });
+    });
+  });
+  if (dupes)
+    warnings.push(`${dupes} row(s) appeared in more than one export and were included once. Check the date ranges overlap as you expect.`);
+  return { items, warnings, dropped };
+}
+
+// Quicken's help page says MM/DD/YYYY, but Quicken Canada's CSV import follows the Windows short-date
+// setting: a test import rejected MM/DD/YYYY and accepted YYYY-MM-DD. So YYYY-MM-DD is the default and
+// the format stays a choice.
+const DATE_FORMATS = { mdy: 'MM/DD/YYYY', ymd: 'YYYY-MM-DD', dmy: 'DD/MM/YYYY' };
+function formatDate(iso, fmt = 'mdy') {
+  const [y, m, d] = iso.split('-');
+  return fmt === 'ymd' ? iso : fmt === 'dmy' ? `${d}/${m}/${y}` : `${m}/${d}/${y}`;
+}
+
+// opts: { dateFmt, accounts: { [GnuCash account]: { name, include } }, cats: { [other account]: category }, quickenCats }
+function buildOutput(items, opts) {
+  return items
+    .filter(it => (opts.accounts[it.accountId] || {}).include)
+    .map(it => ({ it, iso: it.effDate }))
+    .sort((a, b) => a.iso < b.iso ? -1 : a.iso > b.iso ? 1 : 0)   // stable: same-day rows keep export order
+    .map(({ it, iso }) => {
+      const r = Object.fromEntries(FIELDS.map(h => [h, '']));
+      r.date = formatDate(iso, opts.dateFmt);
+      r.payee = it.desc || it.memo || 'GnuCash';   // Quicken requires a payee
+      r.amount = it.amt.toFixed(2);
+      r.category = String((opts.cats || {})[it.kind] ?? defaultCategory(it.kind, opts.quickenCats)).trim();
+      r.account = (opts.accounts[it.accountId].name || '').trim();
+      r.memo = [it.memo, it.splitNote, it.transfer ? 'Transfer: ' + it.kind.split(':').pop() : ''].filter(Boolean).join(' · ');
+      r.chknum = it.num;
+      r._id = it.id;
+      r._iso = iso;
+      return r;
+    });
+}
+
+// Line endings match Quicken's sample file (LF).
+function toCSV(rows) {
+  return [HEADER_LINE].concat(rows.map(r => FIELDS.map(h => csvField(r[h])).join(','))).join('\n') + '\n';
+}
+
+/* ----- "Already in Quicken" check ----- */
+// Reads a CSV exported from Quicken (an account register or a transaction report) and finds the
+// rows of this download that are already there: same amount, date within a few days. Quicken's
+// CSV import never skips duplicates, so this is the safety net.
+
+// "$1,234.56", "-1,234.56", "(1,234.56)", "1234.56-", "CA$12" → number; blank or text → NaN.
+function parseMoney(s) {
+  const t = String(s ?? '').replace(/\s/g, '');
+  if (!/\d/.test(t)) return NaN;
+  const n = parseFloat(t.replace(/[^0-9.]/g, ''));
+  return /^\(.*\)$|^-|-$|^[^0-9.]*-/.test(t) ? -n : n;
+}
+
+const DATE_PARTS = /^(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,4})/;
+// 'ymd' when the year leads; 'dmy' / 'mdy' when some day is over 12; null when it can't be told apart.
+function detectDateOrder(values) {
+  let ymd = 0, dmy = false, mdy = false;
+  values.forEach(v => {
+    const m = DATE_PARTS.exec(String(v).trim());
+    if (!m) return;
+    if (m[1].length === 4) { ymd++; return; }
+    if (+m[1] > 12) dmy = true;
+    if (+m[2] > 12) mdy = true;
+  });
+  if (ymd) return 'ymd';
+  if (dmy !== mdy) return dmy ? 'dmy' : 'mdy';
+  return null;
+}
+function toIsoDate(s, order) {
+  const m = DATE_PARTS.exec(String(s ?? '').trim());
+  if (!m) return null;
+  let [y, mo, d] = order === 'ymd' ? [m[1], m[2], m[3]] : order === 'dmy' ? [m[3], m[2], m[1]] : [m[3], m[1], m[2]];
+  if (y.length <= 2) y = String(2000 + +y);
+  if (y.length !== 4 || +mo < 1 || +mo > 12 || +d < 1 || +d > 31) return null;
+  return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
+const QK_COLS = {
+  date: /^date$/i,
+  amount: /^(amount|total|amt|cash amount|transaction amount)$/i,
+  debit: /^(payment|payments|withdrawal|withdrawals|debit|debits|outflow|spend|decrease)$/i,
+  credit: /^(deposit|deposits|credit|credits|inflow|receive|increase)$/i,
+  payee: /^(payee|description|desc)$/i,
+  account: /^account( name)?$/i,
+  category: /^category$/i,
+};
+// A QIF exported from Quicken (File › Export) holds every account; only transaction sections are read,
+// each row tagged with its account. Dates look like 1/13'26 (apostrophe = 2000s) or 01/13/2026.
+const QIF_TXN_TYPES = /^!Type:(Bank|Cash|CCard|Invst|Oth A|Oth L)\s*$/i;
+function qifDate(s) {
+  const m = /^\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*(['\/])\s*(\d{2,4})/.exec(s);
+  if (!m) return null;
+  const y = m[4].length === 4 ? m[4] : String((m[3] === "'" ? 2000 : 1900) + +m[4]);
+  return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+}
+// Also collects the category list (!Type:Cat) and account names, offered as suggestions in the tools.
+function readQuickenQif(text) {
+  const body = [], categories = new Set(), accounts = new Map();
+  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, rec = {};
+  text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
+    if (line[0] === '!') {
+      inCat = /^!Type:Cat/i.test(line);
+      inAcct = /^!Account/i.test(line);
+      if (/^!Account/i.test(line)) inTxns = false;
+      else if (QIF_TXN_TYPES.test(line)) { inTxns = true; account = listAccount; }
+      else if (/^!Type:/i.test(line)) inTxns = false;
+      rec = {};
+      return;
+    }
+    const code = line[0], val = line.slice(1).trim();
+    if (inCat) { if (code === 'N' && val) categories.add(val); return; }
+    if (!inTxns) {
+      if (!inAcct) return;   // memorized payees, securities, prices… also use N and T
+      // inside an !Account block: N = name, T = type
+      if (code === 'N') listAccount = val;
+      else if (code === 'T') listType = val;
+      else if (code === '^' && listAccount) accounts.set(listAccount, listType);
+      return;
+    }
+    if (code === '^') {
+      const iso = qifDate(rec.D || ''), amount = rec.T ?? rec.U;
+      if (iso && amount !== undefined)
+        body.push([iso, account, rec.P || [rec.N, rec.Y].filter(Boolean).join(' ') || rec.M || '', amount]);
+      rec = {};
+    } else if ('DTUPMNY'.includes(code) && !(code in rec)) rec[code] = val;
+  });
+  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true,
+    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
+}
+// Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
+// Amount is either one column ({ amount }) or a deposit/payment pair ({ credit, debit }).
+function readQuickenExport(text) {
+  if (/^\s*!(Type|Account|Option)/im.test(text.slice(0, 2000))) return readQuickenQif(text);
+  const rows = parseCSV(text).map(r => r.map(c => c.trim()));
+  const hi = rows.findIndex(r => r.some(c => QK_COLS.date.test(c)) &&
+    r.some(c => QK_COLS.amount.test(c) || QK_COLS.debit.test(c) || QK_COLS.credit.test(c)));
+  if (hi < 0) return null;
+  const header = rows[hi], body = rows.slice(hi + 1);
+  const col = rx => header.findIndex(c => rx.test(c));
+  const map = { date: col(QK_COLS.date), payee: col(QK_COLS.payee), account: col(QK_COLS.account) };
+  const amount = col(QK_COLS.amount), credit = col(QK_COLS.credit), debit = col(QK_COLS.debit);
+  if (amount >= 0) map.amount = amount; else { map.credit = credit; map.debit = debit; }
+  const order = detectDateOrder(body.map(r => r[map.date]));
+  // Suggestions from a CSV report: the categories and accounts its rows use ([Transfer] entries aren't categories).
+  const distinct = i => i < 0 ? [] : [...new Set(body.map(r => r[i]).filter(v => v && !/^\[/.test(v) && !/total/i.test(v)))].sort((a, b) => a.localeCompare(b));
+  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })) };
+}
+// Transaction rows only: totals, blank lines and split lines without a date are dropped.
+function quickenRows(qx, map, order) {
+  const out = [];
+  qx.body.forEach(r => {
+    const iso = toIsoDate(r[map.date], order || 'mdy');
+    if (!iso) return;
+    let amount;
+    if (map.amount >= 0) amount = parseMoney(r[map.amount]);
+    else {
+      const c = map.credit >= 0 ? parseMoney(r[map.credit]) : NaN, d = map.debit >= 0 ? parseMoney(r[map.debit]) : NaN;
+      if (Number.isNaN(c) && Number.isNaN(d)) return;
+      amount = (Number.isNaN(c) ? 0 : Math.abs(c)) - (Number.isNaN(d) ? 0 : Math.abs(d));
+    }
+    if (!Number.isFinite(amount)) return;
+    out.push({ iso, amount, payee: map.payee >= 0 ? r[map.payee] || '' : '', account: map.account >= 0 ? r[map.account] || '' : '' });
+  });
+  return out;
+}
+
+const dayNum = iso => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 864e5;
+// ours: [{ id, iso, amount }], theirs: [{ iso, amount, … }]. Same amount to the cent (compared
+// without sign when absolute), dates at most `days` apart. Each Quicken row matches at most one of
+// ours, closest dates first, so two identical deposits need two entries in Quicken to both match.
+// Returns Map(our id → their row).
+function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
+  const cents = a => Math.round((absolute ? Math.abs(a) : a) * 100);
+  const byAmount = new Map();
+  theirs.forEach((t, j) => { const k = cents(t.amount); (byAmount.get(k) || byAmount.set(k, []).get(k)).push(j); });
+  const pairs = [];
+  ours.forEach((o, i) => (byAmount.get(cents(o.amount)) || []).forEach(j => {
+    const gap = Math.abs(dayNum(o.iso) - dayNum(theirs[j].iso));
+    if (gap <= days) pairs.push([gap, i, j]);
+  }));
+  pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+  const usedO = new Set(), usedT = new Set(), out = new Map();
+  pairs.forEach(([, i, j]) => {
+    if (usedO.has(i) || usedT.has(j)) return;
+    usedO.add(i); usedT.add(j); out.set(ours[i].id, theirs[j]);
+  });
+  return out;
+}
+// For download rows left unmatched: the closest unused Quicken row with the same amount that sits
+// just outside the window — shown in the preview so a near miss is visible. Map(our id → { t, gap }).
+function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach = 14 } = {}) {
+  const cents = a => Math.round((absolute ? Math.abs(a) : a) * 100);
+  const used = new Set(matches.values()), out = new Map();
+  ours.forEach(o => {
+    if (matches.has(o.id)) return;
+    let best = null;
+    theirs.forEach(t => {
+      if (used.has(t) || cents(t.amount) !== cents(o.amount)) return;
+      const gap = Math.abs(dayNum(o.iso) - dayNum(t.iso));
+      if (gap > days && gap <= reach && (!best || gap < best.gap)) best = { t, gap };
+    });
+    if (best) out.set(o.id, best);
+  });
+  return out;
+}
+</script>
+
+<script>
+/* ===== UI ===== */
+(function(){
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const LS = 'dollarfin:gnucash-quicken:settings';
+
+  // Remembered on this device only: { dateFormat, accounts:{gnucashAccount:{name,include}}, cats:{otherAccount:category}, qkCats, qkAccts }
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {}
+  const accounts = saved.accounts || {};
+  const cats = saved.cats || {};
+  // Saved as dateFormat: the earlier dateFmt setting defaulted to MM/DD/YYYY, which Quicken Canada rejects.
+  let dateFmt = DATE_FORMATS[saved.dateFormat] ? saved.dateFormat : 'ymd';
+  // Category and account names from the last Quicken export, offered as dropdown suggestions.
+  let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [];
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateFormat: dateFmt, accounts, cats, qkCats, qkAccts })); } catch (e) {} };
+  function fillLists() {
+    $('catList').innerHTML = qkCats.map(c => `<option value="${esc(c)}">`).join('');
+    $('acctList').innerHTML = qkAccts.map(a => `<option value="${esc(a)}">`).join('');
+    $('catHint').textContent = qkCats.length ? `The ${qkCats.length} categories from your Quicken export are in each Category dropdown.`
+      : 'Add a Quicken QIF export (left) to pick categories from a list.';
+  }
+
+  let items = [], files = [], nextFileId = 1;
+
+  async function addFiles(list) {
+    const empty = [];
+    for (const f of list) {
+      const rows = parseCSV(await f.text());
+      if (rows.length < 2) { empty.push(f.name); continue; }
+      const entry = { id: nextFileId++, name: f.name, objs: toObjects(rows) };
+      const i = files.findIndex(x => x.name === f.name);
+      if (i >= 0) files[i] = entry; else files.push(entry);
+    }
+    if (empty.length) alert('Skipped (looks empty): ' + empty.join(', '));
+    const firstDate = f => f.objs.reduce((m, o) => { const d = o.date || '\uffff'; return d < m ? d : m; }, '\uffff');
+    files.sort((a, b) => firstDate(a) < firstDate(b) ? -1 : firstDate(a) > firstDate(b) ? 1 : 0);
+    refresh();
+  }
+
+  function refresh() {
+    const res = combine(files);
+    items = res.items;
+    dropped = res.dropped; repeatOf = new Map(dropped.map(d => [d.id, d.dupOf]));
+
+    const counts = {};
+    items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
+    $('fileList').innerHTML = files.map(f => `<li><span class="fname">${esc(f.name)}</span>
+      <span class="fmeta">${counts[f.name] || 0}</span>
+      <button class="xbtn" data-id="${f.id}" title="Remove" aria-label="Remove ${esc(f.name)}">×</button></li>`).join('');
+    $('fileList').querySelectorAll('.xbtn').forEach(b => b.addEventListener('click', () => {
+      files = files.filter(f => f.id !== Number(b.dataset.id)); refresh();
+    }));
+    $('stFiles').textContent = files.length;
+    $('emptyState').classList.toggle('hidden', files.length > 0);
+    $('previewSection').classList.toggle('hidden', !files.length);
+    $('warnings').innerHTML = res.warnings.map(w => `<div class="warn"><span class="ic">!</span><span>${esc(w)}</span></div>`).join('');
+    $('warnSection').classList.toggle('hidden', !res.warnings.length);
+
+    // One account per GnuCash file; new ones start ticked, named after the GnuCash account.
+    const accts = new Map();
+    items.forEach(i => { if (!accts.has(i.accountId)) accts.set(i.accountId, i.accountType); });
+    accts.forEach((type, id) => { accounts[id] ||= { name: type || 'GnuCash', include: true }; });
+    $('accounts').innerHTML = [...accts].map(([id, type]) => `<div class="acct${accounts[id].include ? '' : ' off'}">
+        <div class="acct-head"><label class="check"><input type="checkbox" data-a="${esc(id)}" ${accounts[id].include ? 'checked' : ''}>${esc(type || 'Account')}</label>
+          <span class="acct-id">${esc(id)}</span></div>
+        <input type="text" data-a="${esc(id)}" value="${esc(accounts[id].name)}" list="acctList" placeholder="Quicken account name" aria-label="Quicken account name for ${esc(id)}">
+      </div>`).join('');
+    $('acctSection').classList.toggle('hidden', accts.size === 0);
+    $('dateTitle').textContent = (accts.size ? '3' : '2') + ' · Date format';
+    $('accounts').querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {
+      accounts[cb.dataset.a].include = cb.checked; save(); refresh();
+    }));
+    $('accounts').querySelectorAll('input[type=text]').forEach(inp => inp.addEventListener('input', () => {
+      accounts[inp.dataset.a].name = inp.value; save(); render();
+    }));
+
+    // One row per GnuCash account on the other side, from ticked accounts only.
+    const ks = new Map();
+    items.filter(i => (accounts[i.accountId] || {}).include).forEach(i => { const k = ks.get(i.kind); if (k) k.n++; else ks.set(i.kind, { n: 1, it: i }); });
+    $('kindTable').innerHTML = '<tr><th>GnuCash account</th><th>Rows</th><th>Quicken category</th></tr>' +
+      [...ks].sort((a, b) => a[0].localeCompare(b[0])).map(([kind, { n, it }]) => `<tr><td>${esc(it.kindLabel)}${it.transfer ? ' <span class="chip rep">transfer</span>' : ''}</td>
+        <td class="num">${n}</td>
+        <td><input type="text" data-k="${esc(kind)}" list="catList" value="${esc(cats[kind] ?? defaultCategory(kind, qkCats))}"
+          placeholder="${it.transfer || kind === 'Split' ? 'blank — see memo' : qkCats.length ? 'Pick or type a category' : 'Category'}"></td></tr>`).join('');
+    $('kindSection').classList.toggle('hidden', ks.size === 0);
+    $('kindTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      cats[inp.dataset.k] = inp.value; save(); render();
+    }));
+    render();
+  }
+
+  const allRows = (src = items) => buildOutput(src, { dateFmt, accounts, cats, quickenCats: qkCats });
+  const repeatRows = () => allRows(dropped);
+  let dropped = [], repeatOf = new Map();
+
+  /* ----- Already in Quicken: rows matching a Quicken export are left out of the download ----- */
+  const qk = { name: '', qx: null, map: null, order: null, account: '', days: 3, keep: {} };
+  let qkLast = new Map();
+  async function qkLoad(file) {
+    const qx = readQuickenExport(await file.text());
+    if (!qx) { alert(`Couldn't find a Date column and an Amount (or Payment/Deposit) column in ${file.name}.`); return; }
+    Object.assign(qk, { name: file.name, qx, map: { ...qx.map }, order: qx.order, keep: {} });
+    if (qx.categories.length) qkCats = qx.categories;
+    if (qx.accounts.length) qkAccts = qx.accounts.map(a => a.name);
+    save(); fillLists(); refresh();
+    const accts = qkAccounts(), want = Object.values(accounts).filter(a => a.include).map(a => (a.name || '').trim()).find(n => accts.includes(n)) || '';
+    qk.account = accts.includes(want) ? want : '';
+    qkPanel(); render();
+  }
+  const qkAccounts = () => qk.qx && qk.map.account >= 0
+    ? [...new Set(quickenRows(qk.qx, qk.map, qk.order).map(r => r.account).filter(Boolean))].sort() : [];
+  const qkTheirs = () => qk.qx ? quickenRows(qk.qx, qk.map, qk.order).filter(r => !qk.account || r.account === qk.account) : [];
+  function qkPanel() {
+    $('qkInfo').classList.toggle('hidden', !qk.qx);
+    $('qkDrop').classList.toggle('hidden', !!qk.qx);
+    if (!qk.qx) return;
+    const h = qk.qx.header, opt = (v, label, sel) => `<option value="${v}"${sel ? ' selected' : ''}>${esc(label)}</option>`;
+    $('qkName').textContent = qk.name;
+    $('qkCols').classList.toggle('hidden', !!qk.qx.qif);
+    $('qkDate').innerHTML = h.map((c, i) => opt(i, c || `Column ${i + 1}`, i === qk.map.date)).join('');
+    const amountOpts = h.map((c, i) => opt('c' + i, c || `Column ${i + 1}`, i === qk.map.amount));
+    const pc = h.findIndex(c => QK_COLS.credit.test(c)), pd = h.findIndex(c => QK_COLS.debit.test(c));
+    if (pc >= 0 && pd >= 0) amountOpts.push(opt(`p${pc}:${pd}`, `${h[pc]} − ${h[pd]}`, qk.map.amount === undefined));
+    $('qkAmount').innerHTML = amountOpts.join('');
+    const detected = { ymd: 'year first', dmy: 'day first', mdy: 'month first' }[qk.qx.order] || 'unclear — month first assumed';
+    $('qkOrder').innerHTML = [['', `Auto (${detected})`], ['mdy', 'Month first'], ['dmy', 'Day first'], ['ymd', 'Year first']]
+      .map(([v, l]) => opt(v, l, v === (qk.order === qk.qx.order ? '' : qk.order))).join('');
+    const accts = qkAccounts();
+    $('qkAccountWrap').classList.toggle('hidden', !accts.length);
+    $('qkAccount').innerHTML = opt('', 'All accounts', !qk.account) + accts.map(a => opt(esc(a), a, a === qk.account)).join('');
+    $('qkDays').value = qk.days;
+  }
+  // Every row and what happens to it: 'new' (downloads), 'kept' (matches Quicken, kept by you),
+  // 'quicken' (matches Quicken, left out) or 'repeat' (same row in another file, included once).
+  let view = 'all';
+  const rowIso = r => r._iso;
+  const rowLabel = r => [r.payee, r.memo].filter(Boolean).join(' — ');
+  function analyse() {
+    const all = allRows(), theirs = qkTheirs();
+    const ours = all.map(r => ({ id: r._id, iso: rowIso(r), amount: Number(r.amount) }));
+    const opts = { days: qk.days, absolute: false };
+    qkLast = qk.qx ? matchExisting(ours, theirs, opts) : new Map();
+    const near = qk.qx ? nearMisses(ours, theirs, qkLast, opts) : new Map();
+    const list = all.map(r => ({ r, match: qkLast.get(r._id), near: near.get(r._id),
+        status: qkLast.has(r._id) ? (qk.keep[r._id] ? 'kept' : 'quicken') : 'new' }))
+      .concat(repeatRows().map(r => ({ r, status: 'repeat', dupOf: repeatOf.get(r._id) })));
+    list.sort((a, b) => rowIso(a.r) < rowIso(b.r) ? -1 : rowIso(a.r) > rowIso(b.r) ? 1 : 0);
+    return { list, theirs, outside: items.filter(it => !(accounts[it.accountId] || {}).include).length };
+  }
+  const downloads = x => x.status === 'new' || x.status === 'kept';
+  // What gets downloaded: new rows, plus matches you chose to keep.
+  const current = () => analyse().list.filter(downloads).map(x => x.r);
+  // The 'Already in Quicken' filter keeps rows you untick in view (as 'Keeping') instead of moving them away.
+  const inView = x => view === 'all' || (view === 'new' ? downloads(x) : view === 'quicken' ? !!x.match : x.status === view);
+
+  const FLOW = [['new', 'Downloading', 'var(--board)'], ['quicken', 'Already in Quicken', 'var(--accent)'],
+    ['repeat', 'Repeated in another file', 'var(--together)'], ['outside', 'In unticked accounts', '#c9d1cd']];
+  function renderFlow({ list, theirs, outside }) {
+    const count = { new: list.filter(downloads).length, quicken: 0, repeat: 0, outside };
+    list.forEach(x => { if (x.status === 'quicken' || x.status === 'repeat') count[x.status]++; });
+    const segs = FLOW.filter(([k]) => count[k]), total = segs.reduce((t, [k]) => t + count[k], 0);
+    $('qkCount').textContent = qk.qx ? theirs.length + ' rows' : '';
+    $('stSkip').textContent = count.quicken;
+    if (!segs.some(([k]) => k === view)) view = 'all';
+    $('flowSection').classList.toggle('hidden', !total);
+    $('flowTotal').textContent = total + (total === 1 ? ' row' : ' rows') + ' from GnuCash';
+    $('flowBar').innerHTML = segs.map(([k, label, col]) =>
+      `<span class="flow-seg" style="flex:${count[k]} 1 0;background:${col}" title="${label}: ${count[k]}"></span>`).join('');
+    const kept = list.filter(x => x.status === 'kept').length;
+    $('flowLegend').innerHTML = segs.map(([k, label, col]) =>
+      `<button type="button" class="flow-key${view === k ? ' active' : ''}" data-v="${k}"${k === 'outside' ? ' disabled' : ''}>
+        <span class="sw" style="background:${col}"></span>${label} <b>${count[k]}</b></button>`).join('') +
+      (kept ? `<span class="hint" style="margin:0">including ${kept} you chose to keep</span>` : '') +
+      (view !== 'all' ? '<button type="button" class="linkbtn" data-v="all">Show all rows</button>' : '');
+    $('flowLegend').querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
+      view = view === b.dataset.v ? 'all' : b.dataset.v; render();
+    }));
+    $('flowNote').textContent = !qk.qx ? 'Add a Quicken export (left) to see which of these are already in Quicken.'
+      : `Compared with ${theirs.length} transaction${theirs.length === 1 ? '' : 's'} in ${qk.account || 'your Quicken export'}: same amount, at most ${qk.days} day${qk.days === 1 ? '' : 's'} apart.`;
+    drawTimeline(list, theirs);
+  }
+
+  // Two lanes — what Quicken already has, and what's coming from GnuCash — with a line joining
+  // each matched pair, so the overlap (and anything left over on either side) is visible at a glance.
+  function drawTimeline(list, theirs) {
+    const svg = $('timeline'), ws = list.filter(x => x.status !== 'repeat');
+    svg.classList.toggle('hidden', !qk.qx || !ws.length);
+    if (!qk.qx || !ws.length) return;
+    const W = Math.max(svg.clientWidth || svg.parentNode.clientWidth || 600, 280), H = 104, L = 92, R = 14, yQ = 30, yW = 70;
+    const allDays = ws.map(x => dayNum(rowIso(x.r))).concat(theirs.map(t => dayNum(t.iso)));
+    let d0 = Math.min(...allDays), d1 = Math.max(...allDays);
+    if (d1 - d0 < 20) { d0 -= 10; d1 += 10; }
+    const X = d => L + (d - d0) / (d1 - d0) * (W - L - R);
+    const span = (ds, y) => ds.length ? `<rect class="tl-band" x="${X(Math.min(...ds)) - 7}" y="${y - 10}" width="${X(Math.max(...ds)) - X(Math.min(...ds)) + 14}" height="20" rx="10"/>` : '';
+    const stack = {}, place = (d, y) => { const k = y + ':' + Math.round(X(d) / 5), n = stack[k] = (stack[k] ?? -1) + 1;
+      return [X(d), y + (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 4]; };
+    const fmt = d => new Date(d * 864e5).toISOString().slice(0, 10);
+    const ticks = [];
+    for (let t = new Date(d0 * 864e5); t <= new Date(d1 * 864e5); t.setUTCMonth(t.getUTCMonth() + 1, 1)) {
+      const m = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1)) / 864e5;
+      if (m >= d0) ticks.push(m);
+    }
+    const every = Math.ceil(ticks.length / Math.max(1, Math.floor((W - L) / 46)));
+    const mon = d => new Date(d * 864e5).toLocaleString('en-CA', { month: 'short', timeZone: 'UTC' });
+    // Label the month the axis starts in too, unless a month line sits right at the left edge.
+    const startLabel = !ticks.length || X(ticks[0]) - X(d0) > 40 ? `<text x="${X(d0)}" y="${H - 2}">${mon(d0)}</text>` : '';
+    const used = new Map(), pos = new Map();
+    list.forEach(x => { if (x.match) used.set(x.match, x); });
+    let links = '', dots = '';
+    theirs.forEach(t => {
+      const [cx, cy] = place(dayNum(t.iso), yQ); pos.set(t, [cx, cy]);
+      dots += `<circle class="${used.has(t) ? 'd-q' : 'd-only'}" cx="${cx}" cy="${cy}" r="3.6"><title>${esc(t.iso)} · ${esc(t.amount.toFixed(2))}${t.payee ? ' · ' + esc(t.payee) : ''} — ${used.has(t) ? 'matches a GnuCash row' : 'only in Quicken'}</title></circle>`;
+    });
+    ws.forEach(x => {
+      const [cx, cy] = place(dayNum(rowIso(x.r)), yW);
+      if (x.match) { const [qx, qy] = pos.get(x.match); links += `<line class="tl-link${x.status === 'kept' ? ' kept' : ''}" x1="${cx}" y1="${cy}" x2="${qx}" y2="${qy}"/>`; }
+      const what = { new: 'new — downloading', quicken: 'already in Quicken — left out', kept: 'matches Quicken, but you kept it' }[x.status];
+      dots += `<circle class="d-${x.status}" cx="${cx}" cy="${cy}" r="3.6"><title>${esc(rowIso(x.r))} · ${esc(x.r.amount)} · ${esc(rowLabel(x.r))} — ${what}</title></circle>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML =
+      `<text class="lane" x="0" y="${yQ + 4}">In Quicken</text><text class="lane" x="0" y="${yW + 4}">GnuCash</text>` +
+      span(theirs.map(t => dayNum(t.iso)), yQ) + span(ws.map(x => dayNum(rowIso(x.r))), yW) +
+      ticks.map((m, i) => `<line class="tl-tick" x1="${X(m)}" x2="${X(m)}" y1="${yQ - 16}" y2="${yW + 14}"/>` +
+        (i % every ? '' : `<text x="${X(m) + 3}" y="${H - 2}">${new Date(m * 864e5).toLocaleString('en-CA', { month: 'short', timeZone: 'UTC' })}${new Date(m * 864e5).getUTCMonth() === 0 ? ' ' + new Date(m * 864e5).getUTCFullYear() : ''}</text>`)).join('') +
+      startLabel + links + dots;
+    svg.setAttribute('aria-label', `Timeline from ${fmt(d0)} to ${fmt(d1)}: ${theirs.length} transactions in Quicken, ${ws.length} from GnuCash, ${used.size} matched.`);
+  }
+  let resizeTimer;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (qk.qx && files.length) render(); }, 150); });
+
+  // First preview column: what happens to the row, why, and (for matches) the tick box.
+  function statusCell(x) {
+    const id = esc(x.r._id), m = x.match;
+    const matched = m ? `<div class="why">matches ${esc(m.iso)} · ${esc(m.amount.toFixed(2))}${m.payee ? ' · ' + esc(m.payee) : ''}</div>` : '';
+    if (x.status === 'quicken') return `<label class="chip q"><input type="checkbox" class="qkskip" data-id="${id}" checked aria-label="Leave out (already in Quicken)">In Quicken</label>${matched}`;
+    if (x.status === 'kept') return `<label class="chip kept"><input type="checkbox" class="qkskip" data-id="${id}" aria-label="Leave out (already in Quicken)">Keeping</label>${matched}`;
+    if (x.status === 'repeat') return `<span class="chip rep">Repeat</span><div class="why">also in ${esc(x.dupOf || 'another file')} — included once</div>`;
+    const n = x.near;
+    return `<span class="chip new">New</span>` + (n ? `<div class="why">Quicken has ${esc(n.t.amount.toFixed(2))} on ${esc(n.t.iso)} — ${n.gap} days off, outside the match window</div>` : '');
+  }
+  function bindSkips() {
+    $('preview').querySelectorAll('.qkskip').forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) delete qk.keep[cb.dataset.id]; else qk.keep[cb.dataset.id] = true;
+      render();
+    }));
+  }
+  $('qkFile').addEventListener('change', e => { if (e.target.files[0]) qkLoad(e.target.files[0]); e.target.value = ''; });
+  ['dragenter','dragover'].forEach(ev => $('qkDrop').addEventListener(ev, e => { e.preventDefault(); $('qkDrop').classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => $('qkDrop').addEventListener(ev, e => { e.preventDefault(); $('qkDrop').classList.remove('over'); }));
+  $('qkDrop').addEventListener('drop', e => { if (e.dataTransfer.files[0]) qkLoad(e.dataTransfer.files[0]); });
+  $('qkClear').addEventListener('click', () => { Object.assign(qk, { name: '', qx: null, map: null, keep: {} }); qkPanel(); render(); });
+  $('qkDate').addEventListener('change', () => {
+    qk.map.date = +$('qkDate').value;
+    qk.qx.order = detectDateOrder(qk.qx.body.map(r => r[qk.map.date])); qk.order = qk.qx.order;
+    qkPanel(); render();
+  });
+  $('qkAmount').addEventListener('change', () => {
+    const v = $('qkAmount').value;
+    delete qk.map.amount; delete qk.map.credit; delete qk.map.debit;
+    if (v[0] === 'c') qk.map.amount = +v.slice(1);
+    else { const [c, d] = v.slice(1).split(':'); qk.map.credit = +c; qk.map.debit = +d; }
+    render();
+  });
+  $('qkOrder').addEventListener('change', () => { qk.order = $('qkOrder').value || qk.qx.order; render(); });
+  $('qkAccount').addEventListener('change', () => { qk.account = $('qkAccount').value; render(); });
+  $('qkDays').addEventListener('change', () => { qk.days = +$('qkDays').value; render(); });
+
+  function render() {
+    const a = analyse(), rows = a.list.filter(downloads).map(x => x.r);
+    renderFlow(a);
+    const cols = ['date','payee','amount','category','account','memo'];
+    $('preview').innerHTML = '<tr><th>status</th>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
+      a.list.filter(inView).map(x => `<tr class="st-${x.status}${downloads(x) ? '' : ' left-out'}"><td>${statusCell(x)}</td>` +
+        cols.map(c => `<td${c === 'amount' ? ' class="num"' : ''}>${esc(x.r[c])}</td>`).join('') + '</tr>').join('');
+    bindSkips();
+    $('count').textContent = rows.length + ' to download';
+    $('stTx').textContent = rows.length;
+    $('stNet').textContent = rows.reduce((s, r) => s + Number(r.amount), 0).toFixed(2);
+    const unnamed = rows.some(r => !r.account);
+    const ok = rows.length && !unnamed;
+    $('dl').disabled = !ok;
+    const why = !files.length ? 'Waiting for a GnuCash export' : !rows.length ? 'Tick at least one account'
+      : unnamed ? 'Give every ticked account a Quicken name' : 'Ready to download';
+    $('dl').title = ok ? '' : why;
+    $('stReady').textContent = why;
+  }
+
+  $('forget').addEventListener('click', () => {
+    if (!confirm('Forget the saved account names and categories on this device?')) return;
+    try { localStorage.removeItem(LS); } catch (e) {}
+    [accounts, cats].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+    qkCats = []; qkAccts = []; fillLists();
+    refresh();
+  });
+
+  $('dl').addEventListener('click', () => {
+    const rows = current();
+    const blob = new Blob([toCSV(rows)], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `gnucash-to-quicken-${rows[0]._iso}-to-${rows[rows.length - 1]._iso}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('dateFmt').value = dateFmt;
+  $('dateFmt').addEventListener('change', () => { dateFmt = $('dateFmt').value; save(); render(); });
+  fillLists();
+  $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
+  ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+  $('drop').addEventListener('drop', e => addFiles([...e.dataTransfer.files]));
+})();
+</script>
+</body>
+</html>
