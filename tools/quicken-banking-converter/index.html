@@ -297,9 +297,10 @@
 
 <script id="core">
 /* ===== core logic (DOM-free so it can be tested — see the .test.js beside this file) ===== */
-// Header copied verbatim from Quicken's banking import sample.
-const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum';
-const FIELDS = ['date','payee','fipayee','amount','debitCredit','category','account','tag','memo','chknum'];
+// Header copied verbatim from Quicken's current banking import template (separate debit and credit
+// columns; amount stays signed and debit/credit are left blank, as the template's examples do).
+const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit,credit,category, account, tag, memo, chknum';
+const FIELDS = ['date','payee','fipayee','amount','debit','credit','category','account','tag','memo','chknum'];
 
 function parseCSV(text) {
   const rows = []; let row = [], f = '', q = false;
