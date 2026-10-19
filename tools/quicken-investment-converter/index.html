@@ -115,6 +115,8 @@
   .statusbar .dotline{width:1px;height:18px;background:var(--line);}
   .statusbar .stamp{margin-left:auto;font-size:12px;}
 
+  select{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel-2);}
+  select:focus{outline:none;border-color:var(--accent);}
   .linkbtn{border:none;background:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;}
   .linkbtn:hover{color:var(--danger);}
   .hidden{display:none !important;}
@@ -131,9 +133,9 @@
 <body>
 <div class="app">
   <header class="toolbar">
-    <div class="brand"><span class="mark"></span>Quicken Investment Converter <small>Wealthsimple statement → Quicken CSV / QIF</small></div>
+    <div class="brand"><span class="mark"></span>Quicken Investment Converter <small>Wealthsimple statement → Quicken CSV / QFX</small></div>
     <div class="spacer"></div>
-    <button class="btn" id="dlQif" disabled><span class="ic">⭳</span>Download QIF</button>
+    <button class="btn" id="dlQfx" disabled><span class="ic">⭳</span>Download QFX</button>
     <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download CSV</button>
   </header>
 
@@ -173,9 +175,13 @@
       </section>
 
       <section class="section">
-        <h2 class="section-title">Importing</h2>
-        <p class="hint" style="margin:0">In Quicken for Windows use File › File Import, then the CSV or QIF File option. For QIF, pick the account — ignore the dialog's note that QIF isn't available for this account type.
-          Neither format skips duplicates, so import each month only once.</p>
+        <h2 class="section-title">QFX (Web Connect)</h2>
+        <div class="field">
+          <label class="field-label" for="bid">Broker ID in the file</label>
+          <select id="bid"></select>
+          <p class="hint">Wealthsimple isn't on Intuit's Web Connect list, so the QFX carries this broker's ID to get past Quicken's check. Keep the same one for this account — changing it can break the link.</p>
+        </div>
+        <p class="hint">Back up first, then File › File Import › Web Connect (.QFX) File and link it to your existing account. Re-importing overlapping months is safe — Quicken skips transactions it has seen. The cash balance comes from the statement; transfer accounts only go in the CSV.</p>
       </section>
 
       <section class="section">
@@ -309,6 +315,9 @@ function convert(objs) {
   return { items, warnings, skipped };
 }
 
+// Statement filenames end "...-<account id>-YYYY-MM-DD.csv"
+const acctIdOf = name => (name.match(/-([A-Z0-9]{8,})-\d{4}-\d{2}-\d{2}(?:\s*\(\d+\))?\.csv$/i) || [])[1];
+
 // files: [{ id, name, objs }] in any order. Converts each statement and joins them oldest first.
 // A row repeated in another file (overlapping exports) is dropped; repeats within one file are
 // real transactions — the running balance tells them apart, so they never collide by accident.
@@ -325,16 +334,24 @@ function combine(files) {
       const owner = seen.get(it.key);
       if (owner !== undefined && owner !== f.id) { dupes++; return; }
       seen.set(it.key, f.id);
-      items.push({ ...it, id: f.id + ':' + it.id, file: f.name });
+      items.push({ ...it, id: f.id + ':' + it.id, file: f.name, wsAccount: acctIdOf(f.name) || '' });
     });
   });
+  numberRepeats(items, it => it.wsAccount + '|' + it.key);
+  // Closing cash: the running balance on the latest statement's last CAD row — skipped rows count too,
+  // but stock-lending rows don't (their "balance" is a share count in the security's own currency).
+  let cash = 0;
+  converted.forEach(({ f }) => f.objs.forEach(o => {
+    const b = num(o.balance);
+    if ((!o.currency || o.currency.toUpperCase() === 'CAD') && Number.isFinite(b)) cash = b;
+  }));
   if (dupes)
     warnings.push(`${dupes} row(s) appeared in more than one statement and were included once. Check you haven't loaded the same month twice.`);
   if (items.some(i => i.guessed))
     warnings.push('Rows for XOut / IntInc are based on the template\'s action list, not on a sample statement. Check them after import.');
   if (lending)
     notes.push(`${lending} stock-lending row(s) (LOAN / RECALL) left out: the shares stay yours and no cash moves, so Quicken has nothing to record.`);
-  return { items, warnings, notes };
+  return { items, warnings, notes, cash };
 }
 
 function buildOutput(items, opts) {
@@ -352,6 +369,9 @@ function buildOutput(items, opts) {
     if (it.memo) r.memo = it.memo;
     if (it.action === 'XIn' || it.action === 'XOut') r.transferAccount = ((opts.xferByRow || {})[it.id] || '').trim() || opts.xfer;
     r._id = it.id;
+    r._iso = date;
+    r._sym = it.symbol || '';
+    r._fitid = hash128(it.wsAccount + '|' + it.key + '|' + it.occ);
     return r;
   }).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);  // stable: same-day rows keep statement order
 }
@@ -360,12 +380,11 @@ function toCSV(rows) {
   return [HEADER.join(',')].concat(rows.map(r => HEADER.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
 }
 
-/* ----- QIF (Quicken Interchange Format) ----- */
-// Quicken for Windows (US and Canada) reads QIF dates as MM/DD/YYYY whatever the Windows date
-// setting, and mis-reads UTF-8 — so text goes out as Windows-1252 bytes with CRLF line endings.
-const qifText = s => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
-// Account names can't contain [ ] / | ^ : in Quicken (they're QIF delimiters); it swaps them for hyphens too.
-const qifAccount = s => qifText(s).replace(/[\[\]\/|^:]/g, '-');
+/* ----- QFX (Quicken Web Connect = OFX 1.0.2 SGML plus Intuit's INTU.BID) ----- */
+// Quicken only imports a QFX whose INTU.BID is on Intuit's Web Connect list for its edition.
+// Wealthsimple isn't listed, so the file borrows a listed Canadian institution's ID; the user picks
+// it and should keep it fixed per account. Text is Windows-1252 (the header says so), and dates are
+// noon with no time zone so no Quicken install shifts them by a day.
 const CP1252 = { 0x20AC:0x80, 0x201A:0x82, 0x0192:0x83, 0x201E:0x84, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87,
   0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A, 0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x2018:0x91, 0x2019:0x92,
   0x201C:0x93, 0x201D:0x94, 0x2022:0x95, 0x2013:0x96, 0x2014:0x97, 0x02DC:0x98, 0x2122:0x99, 0x0161:0x9A,
@@ -378,32 +397,90 @@ function encode1252(str) {
   }
   return out.slice(0, n);
 }
-
-const usDate = iso => { const [y, m, d] = iso.split('-'); return `${m}/${d}/${y}`; };
-const QIF_ACTION = { Bought: 'Buy', Sold: 'Sell', Div: 'Div', IntInc: 'IntInc', MiscExp: 'MiscExp', XIn: 'XIn', XOut: 'XOut' };
-
-// Same rows as the CSV. No !Account block: the account is chosen in Quicken's import dialog, so a
-// mistyped name can't silently create a new account. Securities are listed first because QIF
-// matches them by name. Totals are positive; the action carries the direction.
-function toQIF(rows) {
-  const L = [], secs = new Map();
-  rows.forEach(r => { if (r.security) secs.set(r.security, r.optionalSymbol); });
-  if (secs.size) {
-    L.push('!Type:Security');
-    secs.forEach((sym, name) => L.push('N' + qifText(name), ...(sym ? ['S' + qifText(sym)] : []), 'TStock', '^'));
+// Strip control characters, truncate, then escape — in that order so an entity is never cut in half.
+const sgml = (s, max = 255) => String(s ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, max).trim()
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const ofxDate = iso => iso.replace(/-/g, '') + '120000';   // "2026-01-31" → "20260131120000"
+function ofxNow(d) {   // local time with its GMT offset, e.g. 20261019093000.000[-4]
+  const p = n => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset(), h = Math.trunc(off / 60), m = Math.abs(off % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.000[${h}${m ? '.' + p(m) : ''}]`;
+}
+// FNV-1a in four differently seeded lanes → 32 hex characters. FROZEN: FITIDs and account numbers
+// are built from it, and Quicken remembers FITIDs forever — changing this re-imports all history.
+function hash128(str) {
+  let out = '';
+  for (const seed of [0x811c9dc5, 0x050c5d1f, 0x9e3779b9, 0x85ebca6b]) {
+    let h = seed;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    out += (h >>> 0).toString(16).padStart(8, '0');
   }
-  L.push('!Type:Invst');
+  return out;
+}
+// Quicken links a file to an account by ACCTID; derive a fixed 10-digit number from the Wealthsimple ID.
+const ofxAcctId = id => String(1e9 + parseInt(hash128(String(id)).slice(0, 8), 16) % 9e9);
+// Repeats of the same source row get 0, 1, 2… in source order so each keeps its own FITID.
+function numberRepeats(items, keyOf) {
+  const n = {};
+  items.forEach(it => { const k = keyOf(it); it.occ = n[k] = (n[k] ?? -1) + 1; });
+}
+function ofxHead(bid, now) {
+  return ['OFXHEADER:100', 'DATA:OFXSGML', 'VERSION:102', 'SECURITY:NONE', 'ENCODING:USASCII', 'CHARSET:1252',
+    'COMPRESSION:NONE', 'OLDFILEUID:NONE', 'NEWFILEUID:NONE', '',
+    '<OFX>', '<SIGNONMSGSRSV1>', '<SONRS>', '<STATUS>', '<CODE>0', '<SEVERITY>INFO', '</STATUS>',
+    `<DTSERVER>${ofxNow(now)}`, '<LANGUAGE>ENG', '<FI>', '<ORG>Wealthsimple', `<FID>${bid}`, '</FI>',
+    `<INTU.BID>${bid}`, '</SONRS>', '</SIGNONMSGSRSV1>'];
+}
+const ofxSpan = rows => rows.reduce(([lo, hi], r) => [r._iso < lo ? r._iso : lo, r._iso > hi ? r._iso : hi], ['￿', '']);
+
+// Brokerage Web Connect IDs from Intuit's Canadian institution list (the only investment ones that
+// also work on Quicken Mac).
+const BROKER_IDS = [['03349', 'TD Direct Investing (TD Waterhouse)'], ['04705', 'Interactive Brokers']];
+const CASH_TRNTYPE = { XIn: 'CREDIT', XOut: 'DEBIT', IntInc: 'INT', MiscExp: 'FEE' };
+const CASH_NAME = { XIn: 'Deposit', XOut: 'Withdrawal', IntInc: 'Interest', MiscExp: 'Fee' };
+
+// opts: { bid, accountId (Wealthsimple ID or account name), cash (closing cash balance), now: Date }
+// No INVPOSLIST: positions that disagree with the transactions make Quicken add placeholder entries.
+// Securities are keyed by the original Wealthsimple symbol (TICKER), which never changes; the names
+// and symbols set in the Securities table are what Quicken shows.
+function toQFX(rows, opts) {
+  const [start, end] = ofxSpan(rows);
+  const secs = new Map();
+  rows.forEach(r => { if (r._sym) secs.set(r._sym, r); });
+  const secid = sym => ['<SECID>', `<UNIQUEID>${sgml(sym, 32)}`, '<UNIQUEIDTYPE>TICKER', '</SECID>'];
+  const L = ofxHead(opts.bid, opts.now).concat(['<INVSTMTMSGSRSV1>', '<INVSTMTTRNRS>', '<TRNUID>1', '<STATUS>',
+    '<CODE>0', '<SEVERITY>INFO', '</STATUS>', '<INVSTMTRS>', `<DTASOF>${ofxDate(end)}`, '<CURDEF>CAD',
+    '<INVACCTFROM>', '<BROKERID>wealthsimple.com', `<ACCTID>${ofxAcctId(opts.accountId)}`, '</INVACCTFROM>',
+    '<INVTRANLIST>', `<DTSTART>${ofxDate(start)}`, `<DTEND>${ofxDate(end)}`]);
   rows.forEach(r => {
     const total = Math.abs(Number(r.amount)).toFixed(2);
-    L.push('D' + usDate(r.date), 'N' + QIF_ACTION[r.action]);
-    if (r.security) L.push('Y' + qifText(r.security));
-    if (r.price) L.push('I' + r.price);
-    if (r.shares) L.push('Q' + r.shares);
-    L.push('T' + total);
-    if (r.memo) L.push('M' + qifText(r.memo));
-    if (r.transferAccount) L.push('L[' + qifAccount(r.transferAccount) + ']', '$' + total);
-    L.push('^');
+    const tran = ['<INVTRAN>', `<FITID>${r._fitid}`, `<DTTRADE>${ofxDate(r._iso)}`,
+      ...(r.memo ? [`<MEMO>${sgml(r.memo)}`] : []), '</INVTRAN>'];
+    const cash = ['<SUBACCTSEC>CASH', '<SUBACCTFUND>CASH'];
+    if (r.action === 'Bought')
+      L.push('<BUYSTOCK>', '<INVBUY>', ...tran, ...secid(r._sym), `<UNITS>${r.shares}`, `<UNITPRICE>${r.price}`,
+        `<TOTAL>-${total}`, ...cash, '</INVBUY>', '<BUYTYPE>BUY', '</BUYSTOCK>');
+    else if (r.action === 'Sold')
+      L.push('<SELLSTOCK>', '<INVSELL>', ...tran, ...secid(r._sym), `<UNITS>-${r.shares}`, `<UNITPRICE>${r.price}`,
+        `<TOTAL>${total}`, ...cash, '</INVSELL>', '<SELLTYPE>SELL', '</SELLSTOCK>');
+    else if (r.action === 'Div')
+      L.push('<INCOME>', ...tran, ...secid(r._sym), '<INCOMETYPE>DIV', `<TOTAL>${total}`, ...cash, '</INCOME>');
+    else {   // cash with no security: deposits, withdrawals, interest, fees
+      const out = r.action === 'XOut' || r.action === 'MiscExp';
+      L.push('<INVBANKTRAN>', '<STMTTRN>', `<TRNTYPE>${CASH_TRNTYPE[r.action]}`, `<DTPOSTED>${ofxDate(r._iso)}`,
+        `<TRNAMT>${out ? '-' : ''}${total}`, `<FITID>${r._fitid}`, `<NAME>${sgml(r.memo || CASH_NAME[r.action], 32)}`,
+        ...(r.memo ? [`<MEMO>${sgml(r.memo)}`] : []), '</STMTTRN>', '<SUBACCTFUND>CASH', '</INVBANKTRAN>');
+    }
   });
+  L.push('</INVTRANLIST>', '<INVBAL>', `<AVAILCASH>${Number(opts.cash).toFixed(2)}`, '<MARGINBALANCE>0.00',
+    '<SHORTBALANCE>0.00', '</INVBAL>', '</INVSTMTRS>', '</INVSTMTTRNRS>', '</INVSTMTMSGSRSV1>');
+  if (secs.size) {
+    L.push('<SECLISTMSGSRSV1>', '<SECLIST>');
+    secs.forEach((r, sym) => L.push('<STOCKINFO>', '<SECINFO>', ...secid(sym), `<SECNAME>${sgml(r.security || sym, 120)}`,
+      `<TICKER>${sgml(r.optionalSymbol || sym, 32)}`, '</SECINFO>', '</STOCKINFO>'));
+    L.push('</SECLIST>', '</SECLISTMSGSRSV1>');
+  }
+  L.push('</OFX>');
   return L.join('\r\n') + '\r\n';
 }
 </script>
@@ -422,11 +499,12 @@ function toQIF(rows) {
   saved.accounts ||= {};
   let items = [], files = [], nextFileId = 1, dateMode = saved.dateMode === 'statement' ? 'statement' : 'executed';
   const secOverrides = Object.assign({}, saved.secs);
+  let bid = BROKER_IDS.some(([id]) => id === saved.bid) ? saved.bid : BROKER_IDS[0][0];
+  let cash = 0;
   const xferByRow = {};
 
   // Statement filenames end "...-<account id>-YYYY-MM-DD.csv"; settings are kept per account when
   // every loaded file is from the same one, so a TFSA and an RRSP each get their own Quicken name.
-  const acctIdOf = name => (name.match(/-([A-Z0-9]{8,})-\d{4}-\d{2}-\d{2}(?:\s*\(\d+\))?\.csv$/i) || [])[1];
   function acctKey() {
     const ids = new Set(files.map(f => acctIdOf(f.name)));
     return ids.size === 1 && !ids.has(undefined) ? [...ids][0] : '_last';
@@ -444,7 +522,7 @@ function toQIF(rows) {
     const key = acctKey(), a = { account: $('account').value, xfer: $('xfer').value };
     saved.accounts[key] = a; saved.accounts._last = { ...a, from: key };
     filledFrom = key;
-    saved.secs = secOverrides; saved.dateMode = dateMode;
+    saved.secs = secOverrides; saved.dateMode = dateMode; saved.bid = bid;
     try { localStorage.setItem(LS, JSON.stringify(saved)); } catch (e) {}
   }
 
@@ -472,6 +550,7 @@ function toQIF(rows) {
   function refresh() {
     const res = combine(files);
     items = res.items;
+    cash = res.cash;
     applySavedAccount();
     const counts = {};
     items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
@@ -519,10 +598,10 @@ function toQIF(rows) {
       : !account ? 'Fill in the account name'
       : missing ? `${missing} transfer row(s) still need a transfer account` : 'Ready to download';
     $('dl').title = ok ? '' : why;
-    // QIF doesn't carry the account name (it's picked in Quicken's import dialog).
-    const qifOk = rows.length && !missing;
-    $('dlQif').disabled = !qifOk;
-    $('dlQif').title = qifOk ? '' : why;
+    // QFX needs a fixed account number: from the Wealthsimple ID in the filename, else the account name.
+    const qfxOk = rows.length && (acctKey() !== '_last' || account);
+    $('dlQfx').disabled = !qfxOk;
+    $('dlQfx').title = qfxOk ? '' : !rows.length ? why : 'Fill in the account name';
     $('stReady').textContent = why;
     $('stTx').textContent = rows.length;
     $('stMissing').textContent = missing;
@@ -583,7 +662,14 @@ function toQIF(rows) {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
   $('dl').addEventListener('click', () => download(toCSV(current()), 'text/csv', '.csv'));
-  $('dlQif').addEventListener('click', () => download(encode1252(toQIF(current())), 'application/octet-stream', '.qif'));
+  $('dlQfx').addEventListener('click', () => {
+    const key = acctKey();
+    const qfx = toQFX(current(), { bid, cash, now: new Date(), accountId: key !== '_last' ? key : $('account').value.trim() });
+    download(encode1252(qfx), 'application/vnd.intu.qfx', '.qfx');
+  });
+  $('bid').innerHTML = BROKER_IDS.map(([id, name]) => `<option value="${id}">${esc(name)} (${id})</option>`).join('');
+  $('bid').value = bid;
+  $('bid').addEventListener('change', () => { bid = $('bid').value; save(); });
 
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));

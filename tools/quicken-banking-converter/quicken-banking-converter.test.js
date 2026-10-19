@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQIF, encode1252 })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -82,15 +82,54 @@ test('toCSV writes Quicken\'s banking header verbatim and quotes fields that nee
   assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,My Chequing,,Direct deposit received,');
 });
 
-test('toQIF writes one !Type:Bank list with signed amounts, payee, memo and category', () => {
-  const rows = Q.buildOutput(load().items, { ...OPTS, kinds: { 'Interest||in': { category: 'Interest Inc' }, 'MoneyMovement|TRANSFER|out': { category: '[TFSA]' } } });
-  const qif = Q.toQIF(rows);
-  assert.equal(qif.split('\r\n^\r\n')[0], '!Type:Bank\r\nD01/05/2026\r\nT50.00\r\nPDirect deposit\r\nMDirect deposit received');
-  assert.match(qif, /\r\nD01\/10\/2026\r\nT-25\.00\r\nPTransfer out\r\nMMoney transfer out of the account\r\nL\[TFSA\]\r\n\^/);
-  assert.match(qif, /\r\nD02\/01\/2026\r\nT0\.03\r\nPInterest\r\nMInterest received\r\nLInterest Inc\r\n\^\r\n$/);
-  assert.equal((qif.match(/\^\r\n/g) || []).length, 4);
+// Every aggregate (<TAG> on its own line) must be closed in order; leaf elements carry a value.
+function assertBalanced(qfx) {
+  const [head, body] = qfx.split('\r\n\r\n');
+  assert.equal(head, 'OFXHEADER:100\r\nDATA:OFXSGML\r\nVERSION:102\r\nSECURITY:NONE\r\nENCODING:USASCII\r\nCHARSET:1252\r\nCOMPRESSION:NONE\r\nOLDFILEUID:NONE\r\nNEWFILEUID:NONE');
+  assert.ok(body.startsWith('<OFX>\r\n') && body.endsWith('</OFX>\r\n') && !/[^\r]\n/.test(qfx), 'CRLF, <OFX> root');
+  const stack = [];
+  for (const line of body.split('\r\n').filter(Boolean)) {
+    const open = /^<([A-Z0-9.]+)>$/.exec(line), close = /^<\/([A-Z0-9.]+)>$/.exec(line);
+    if (open) stack.push(open[1]);
+    else if (close) assert.equal(stack.pop(), close[1], 'closing tag order');
+    else assert.match(line, /^<[A-Z0-9.]+>\S/, 'leaf element has a value: ' + line);
+  }
+  assert.equal(stack.length, 0);
+}
+const NOW = new Date(2026, 9, 19, 9, 30, 0);
+const tag = (qfx, t) => [...qfx.matchAll(new RegExp(`<${t.replace('.', '\\.')}>([^\\r]*)`, 'g'))].map(m => m[1]);
+
+test('hash128 and ofxAcctId are frozen (changing them would re-import every past transaction)', () => {
+  assert.equal(Q.hash128(''), '811c9dc5050c5d1f9e3779b985ebca6b');
+  assert.equal(Q.hash128('WS|row|0'), 'a4e075f3467db61144fbffaf4de584d5');
+  assert.equal(Q.ofxAcctId('ACC1'), '2795294097');
+  assert.match(Q.ofxAcctId('anything'), /^[1-9]\d{9}$/);
 });
 
-test('encode1252 keeps French accents as single Windows-1252 bytes', () => {
-  assert.deepEqual([...Q.encode1252('Dépôt')], [0x44, 0xE9, 0x70, 0xF4, 0x74]);
+test('toQFX: a balanced bank statement with signed amounts, INT for interest, and the closing balance', () => {
+  const rows = Q.buildOutput(load().items, { ...OPTS, kinds: { 'MoneyMovement|AFT_IN|in': { payee: 'Pay & Co <Ltd> with a very long payee name' } } });
+  const qfx = Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', balance: '123.4', now: NOW });
+  assertBalanced(qfx);
+  assert.deepEqual(plain(tag(qfx, 'FID')), ['00002']);
+  assert.deepEqual(plain(tag(qfx, 'INTU.BID')), ['00002']);
+  assert.match(tag(qfx, 'DTSERVER')[0], /^20261019093000\.000\[-?\d+(\.\d\d)?\]$/);
+  assert.deepEqual(plain(tag(qfx, 'ACCTID')), [Q.ofxAcctId('ACC1')]);
+  assert.deepEqual(plain(tag(qfx, 'TRNTYPE')), ['CREDIT', 'CREDIT', 'DEBIT', 'INT']);
+  assert.deepEqual(plain(tag(qfx, 'TRNAMT')), ['50.00', '50.00', '-25.00', '0.03']);
+  assert.deepEqual(plain(tag(qfx, 'DTPOSTED')), ['20260105120000', '20260105120000', '20260110120000', '20260201120000']);
+  assert.equal(tag(qfx, 'NAME')[0], 'Pay &amp; Co &lt;Ltd&gt; with a very long');   // cut to 32, then escaped
+  assert.deepEqual(plain(tag(qfx, 'DTSTART').concat(tag(qfx, 'DTEND'), tag(qfx, 'BALAMT'), tag(qfx, 'DTASOF'))),
+    ['20260105120000', '20260201120000', '123.40', '20260201120000']);
+});
+
+test('FITIDs: unique, kept apart for identical rows, and unchanged by the date choice or extra files', () => {
+  const ids = rows => rows.map(r => r._fitid);
+  const a = ids(Q.buildOutput(load().items, OPTS));
+  assert.equal(new Set(a).size, a.length);
+  assert.match(a[0], /^[0-9a-f]{32}$/);
+  const eff = Q.buildOutput(load().items, { ...OPTS, dateMode: 'effective' });
+  assert.deepEqual(plain(ids(eff)).sort(), plain(a).sort());
+  const feb = exp('2026-02-02,10:00:00,,ACC1,Chequing,MoneyMovement,AFT_IN,Direct deposit received,,,,CAD,60,,,60');
+  const both = ids(Q.buildOutput(Q.combine([{ id: 7, name: 'b.csv', objs: feb }, { id: 9, name: 'a.csv', objs: exp(...ROWS) }]).items, OPTS));
+  assert.deepEqual(plain(a).filter(x => both.includes(x)), plain(a));
 });

@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV, toQIF, encode1252 })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -178,31 +178,81 @@ test('TRFINTF (tax-free cash transfer in) becomes an XIn with a memo', () => {
   assert.equal(r.transferAccount, 'Chequing');
 });
 
-test('toQIF lists securities first, then Invst records with positive totals and US dates', () => {
-  const items = Q.combine([{ id: 1, name: 's.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]).items;
-  const qif = Q.toQIF(Q.buildOutput(items, { ...OPTS, secOverrides: { ABC: { name: 'My: Equity' } } }));
-  assert.ok(qif.endsWith('\r\n') && !/[^\r]\n/.test(qif), 'CRLF line endings only');
-  const recs = qif.split('\r\n^\r\n');
-  assert.equal(recs[0], '!Type:Security\r\nNExample Bond ETF - Hedged\r\nSXYZ.F\r\nTStock');
-  assert.equal(recs[1], 'NMy: Equity\r\nSABC\r\nTStock');
-  assert.equal(recs[2], '!Type:Invst\r\nD01/02/2026\r\nNXIn\r\nT1000.00\r\nL[Chequing]\r\n$1000.00');
-  assert.equal(recs[3], 'D01/04/2026\r\nNBuy\r\nYExample Bond ETF - Hedged\r\nI20.00\r\nQ10.5\r\nT210.00');
-  assert.equal(recs[4], 'D01/05/2026\r\nNSell\r\nYMy: Equity\r\nI1234.50\r\nQ1000\r\nT1234500.00');
-  assert.equal(recs[5], 'D01/31/2026\r\nNMiscExp\r\nT0.25\r\nMManagement fees');
+// Every aggregate (<TAG> on its own line) must be closed in order; leaf elements carry a value.
+function assertBalanced(qfx) {
+  const [head, body] = qfx.split('\r\n\r\n');
+  assert.equal(head, 'OFXHEADER:100\r\nDATA:OFXSGML\r\nVERSION:102\r\nSECURITY:NONE\r\nENCODING:USASCII\r\nCHARSET:1252\r\nCOMPRESSION:NONE\r\nOLDFILEUID:NONE\r\nNEWFILEUID:NONE');
+  assert.ok(body.startsWith('<OFX>\r\n') && body.endsWith('</OFX>\r\n') && !/[^\r]\n/.test(qfx), 'CRLF, <OFX> root');
+  const stack = [];
+  for (const line of body.split('\r\n').filter(Boolean)) {
+    const open = /^<([A-Z0-9.]+)>$/.exec(line), close = /^<\/([A-Z0-9.]+)>$/.exec(line);
+    if (open) stack.push(open[1]);
+    else if (close) assert.equal(stack.pop(), close[1], 'closing tag order');
+    else assert.match(line, /^<[A-Z0-9.]+>\S/, 'leaf element has a value: ' + line);
+  }
+  assert.equal(stack.length, 0);
+}
+const NOW = new Date(2026, 9, 19, 9, 30, 0);
+const tag = (qfx, t) => [...qfx.matchAll(new RegExp(`<${t.replace('.', '\\.')}>([^\\r]*)`, 'g'))].map(m => m[1]);
+
+test('hash128 and ofxAcctId are frozen (changing them would re-import every past transaction)', () => {
+  assert.equal(Q.hash128(''), '811c9dc5050c5d1f9e3779b985ebca6b');
+  assert.equal(Q.hash128('WS|row|0'), 'a4e075f3467db61144fbffaf4de584d5');
+  assert.equal(Q.ofxAcctId('ACC1'), '2795294097');
+  assert.match(Q.ofxAcctId('anything'), /^[1-9]\d{9}$/);
 });
 
-test('toQIF: dividends, interest and transfer-account names with QIF delimiters', () => {
+test('toQFX: buys, sells, fees and deposits as OFX investment records, with cash from the statement', () => {
+  const res = Q.combine([{ id: 1, name: 'Acct-monthly-statement-transactions-AB12CD34CAD-2026-01-01.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]);
+  const rows = Q.buildOutput(res.items, { ...OPTS, secOverrides: { 'XYZ.F': { name: 'My Bond', symbol: 'XYZ' } } });
+  const qfx = Q.toQFX(rows, { bid: '03349', accountId: 'AB12CD34CAD', cash: res.cash, now: NOW });
+  assertBalanced(qfx);
+  assert.equal(res.cash, 1235290.75);   // last statement row's running balance
+  assert.deepEqual(plain(tag(qfx, 'INTU.BID')), ['03349']);
+  assert.ok(!qfx.includes('<INVPOSLIST>'));
+  const body = qfx.slice(qfx.indexOf('<INVTRANLIST>'), qfx.indexOf('</INVTRANLIST>'));
+  assert.deepEqual(body.match(/<(INVBANKTRAN|BUYSTOCK|SELLSTOCK|INCOME)>/g), ['<INVBANKTRAN>', '<BUYSTOCK>', '<SELLSTOCK>', '<INVBANKTRAN>']);
+  assert.deepEqual(plain(tag(body, 'UNITS')), ['10.5', '-1000']);
+  assert.deepEqual(plain(tag(body, 'TOTAL')), ['-210.00', '1234500.00']);
+  assert.deepEqual(plain(tag(body, 'TRNTYPE')), ['CREDIT', 'FEE']);
+  assert.deepEqual(plain(tag(body, 'TRNAMT')), ['1000.00', '-0.25']);
+  assert.deepEqual(plain(tag(body, 'DTTRADE')), ['20260104120000', '20260105120000']);
+  assert.deepEqual(plain(tag(qfx, 'AVAILCASH')), ['1235290.75']);
+  // SECLIST: keyed by the original symbol, shown with the names set in the Securities table
+  const sec = qfx.slice(qfx.indexOf('<SECLIST>'));
+  assert.deepEqual(plain(tag(sec, 'UNIQUEID')), ['XYZ.F', 'ABC']);
+  assert.deepEqual(plain(tag(sec, 'SECNAME')), ['My Bond', 'Example Equity ETF – UNITS']);
+  assert.deepEqual(plain(tag(sec, 'TICKER')), ['XYZ', 'ABC']);
+});
+
+test('toQFX: dividends as INCOME DIV, lending interest as INT, withdrawals negative', () => {
   const objs = month(
     '"2026-04-06","DIV","XYZ - Example ETF: Cash dividend distribution, received on 2026-04-06, record date of 2026-03-30","1.23","1.23","CAD"',
     '"2026-04-15","FPLINT","Stock lending monthly interest payment","0.02","1.25","CAD"',
-    '"2026-04-20","CONT","Contribution (executed at 2026-04-20)","5.0","6.25","CAD"');
-  const items = Q.combine([{ id: 1, name: 'x.csv', objs }]).items;
-  const qif = Q.toQIF(Q.buildOutput(items, { ...OPTS, xfer: 'Bank: Main/Joint' }));
-  assert.match(qif, /\r\nD04\/06\/2026\r\nNDiv\r\nYExample ETF\r\nT1\.23\r\n\^/);
-  assert.match(qif, /\r\nD04\/15\/2026\r\nNIntInc\r\nT0\.02\r\nMStock lending monthly interest payment\r\n\^/);
-  assert.match(qif, /\r\nNXIn\r\nT5\.00\r\nMContribution\r\nL\[Bank- Main-Joint\]\r\n\$5\.00\r\n\^/);
+    '"2026-04-20","TRFOUT","Money transfer out of the account (executed at 2026-04-20)","-1.0","0.25","CAD"');
+  const res = Q.combine([{ id: 1, name: 'x.csv', objs }]);
+  const qfx = Q.toQFX(Q.buildOutput(res.items, OPTS), { bid: '03349', accountId: 'Test Account', cash: res.cash, now: NOW });
+  assertBalanced(qfx);
+  assert.match(qfx, /<INCOME>\r\n<INVTRAN>\r\n<FITID>[0-9a-f]{32}\r\n<DTTRADE>20260406120000\r\n<\/INVTRAN>\r\n<SECID>\r\n<UNIQUEID>XYZ\r\n<UNIQUEIDTYPE>TICKER\r\n<\/SECID>\r\n<INCOMETYPE>DIV\r\n<TOTAL>1\.23\r\n/);
+  assert.deepEqual(plain(tag(qfx, 'TRNTYPE')), ['INT', 'DEBIT']);
+  assert.deepEqual(plain(tag(qfx, 'TRNAMT')), ['0.02', '-1.00']);
+  assert.deepEqual(plain(tag(qfx, 'AVAILCASH')), ['0.25']);
+});
+
+test('investment FITIDs are unique and do not depend on the date choice', () => {
+  const items = Q.combine([{ id: 1, name: 'x-AB12CD34CAD-2026-01-01.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]).items;
+  const a = Q.buildOutput(items, OPTS).map(r => r._fitid), b = Q.buildOutput(items, { ...OPTS, dateMode: 'statement' }).map(r => r._fitid);
+  assert.equal(new Set(a).size, a.length);
+  assert.deepEqual(plain(b).sort(), plain(a).sort());
 });
 
 test('encode1252 writes Windows-1252 bytes: accents as single bytes, smart punctuation mapped, others "?"', () => {
   assert.deepEqual([...Q.encode1252('Aé–€✓')], [0x41, 0xE9, 0x96, 0x80, 0x3F]);
+});
+
+test('closing cash ignores a trailing stock-lending row (its balance is a share count, not cash)', () => {
+  const objs = month(
+    '"2026-05-01","CONT","Contribution (executed at 2026-05-01)","30.0","30.0","CAD"',
+    '"2026-05-11","LOAN","XYZ - Example ETF: 2.0000 Shares on loan (executed at 2026-05-11)","0.0","0.0","XYZ"');
+  assert.equal(Q.combine([{ id: 1, name: 'x.csv', objs }]).cash, 30);
 });

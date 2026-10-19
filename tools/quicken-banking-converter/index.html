@@ -122,6 +122,8 @@
   .acct .acct-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
   .acct .acct-id{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;}
   .acct.off input[type=text]{opacity:.5;}
+  select{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel-2);}
+  select:focus{outline:none;border-color:var(--accent);}
   .linkbtn{border:none;background:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;}
   .linkbtn:hover{color:var(--danger);}
   .hidden{display:none !important;}
@@ -138,9 +140,9 @@
 <body>
 <div class="app">
   <header class="toolbar">
-    <div class="brand"><span class="mark"></span>Quicken Banking Converter <small>Wealthsimple activities → Quicken CSV / QIF</small></div>
+    <div class="brand"><span class="mark"></span>Quicken Banking Converter <small>Wealthsimple activities → Quicken CSV / QFX</small></div>
     <div class="spacer"></div>
-    <button class="btn" id="dlQif" disabled><span class="ic">⭳</span>Download QIF</button>
+    <button class="btn" id="dlQfx" disabled><span class="ic">⭳</span>Download QFX</button>
     <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download CSV</button>
   </header>
 
@@ -172,9 +174,18 @@
       </section>
 
       <section class="section">
-        <h2 class="section-title">Importing</h2>
-        <p class="hint" style="margin:0">In Quicken for Windows use File › File Import, then the CSV or QIF File option. For QIF, pick the account — ignore the dialog's note that QIF isn't available for this account type.
-          Neither format skips duplicates, so import each month only once.</p>
+        <h2 class="section-title">QFX (Web Connect)</h2>
+        <div class="field">
+          <label class="field-label" for="bid">Bank ID in the file</label>
+          <select id="bid"></select>
+          <p class="hint">Wealthsimple isn't on Intuit's Web Connect list, so the QFX carries this bank's ID to get past Quicken's check. Keep the same one for this account — changing it can break the link.</p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="closeBal">Closing balance <span id="closeDate"></span></label>
+          <input id="closeBal" type="text" inputmode="decimal" placeholder="e.g. 1234.56" autocomplete="off">
+          <p class="hint">The account's balance in Wealthsimple at the end of the last day. Quicken shows it as the online balance.</p>
+        </div>
+        <p class="hint">QFX holds one account. Back up first, then File › File Import › Web Connect (.QFX) File and link it to your existing account. Re-importing overlapping dates is safe — Quicken skips transactions it has seen. Categories only go in the CSV.</p>
       </section>
 
       <section class="section">
@@ -321,6 +332,7 @@ function combine(files) {
   });
   if (dupes)
     warnings.push(`${dupes} row(s) appeared in more than one export and were included once. Check the date ranges overlap as you expect.`);
+  numberRepeats(items, it => it.accountId + '|' + it.key);
   return { items, warnings };
 }
 
@@ -343,6 +355,10 @@ function buildOutput(items, opts) {
       r.account = (opts.accounts[it.accountId].name || '').trim();
       r.memo = it.desc;
       r._id = it.id;
+      r._iso = iso;
+      r._accountId = it.accountId;
+      r._interest = it.kind.startsWith('Interest|');
+      r._fitid = hash128(it.accountId + '|' + it.key + '|' + it.occ);
       return r;
     });
 }
@@ -351,12 +367,11 @@ function toCSV(rows) {
   return [HEADER_LINE].concat(rows.map(r => FIELDS.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
 }
 
-/* ----- QIF (Quicken Interchange Format) ----- */
-// Quicken for Windows (US and Canada) reads QIF dates as MM/DD/YYYY whatever the Windows date
-// setting, and mis-reads UTF-8 — so text goes out as Windows-1252 bytes with CRLF line endings.
-const qifText = s => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
-// Account names can't contain [ ] / | ^ : in Quicken (they're QIF delimiters); it swaps them for hyphens too.
-const qifAccount = s => qifText(s).replace(/[\[\]\/|^:]/g, '-');
+/* ----- QFX (Quicken Web Connect = OFX 1.0.2 SGML plus Intuit's INTU.BID) ----- */
+// Quicken only imports a QFX whose INTU.BID is on Intuit's Web Connect list for its edition.
+// Wealthsimple isn't listed, so the file borrows a listed Canadian institution's ID; the user picks
+// it and should keep it fixed per account. Text is Windows-1252 (the header says so), and dates are
+// noon with no time zone so no Quicken install shifts them by a day.
 const CP1252 = { 0x20AC:0x80, 0x201A:0x82, 0x0192:0x83, 0x201E:0x84, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87,
   0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A, 0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x2018:0x91, 0x2019:0x92,
   0x201C:0x93, 0x201D:0x94, 0x2022:0x95, 0x2013:0x96, 0x2014:0x97, 0x02DC:0x98, 0x2122:0x99, 0x0161:0x9A,
@@ -369,18 +384,62 @@ function encode1252(str) {
   }
   return out.slice(0, n);
 }
+// Strip control characters, truncate, then escape — in that order so an entity is never cut in half.
+const sgml = (s, max = 255) => String(s ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, max).trim()
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const ofxDate = iso => iso.replace(/-/g, '') + '120000';   // "2026-01-31" → "20260131120000"
+function ofxNow(d) {   // local time with its GMT offset, e.g. 20261019093000.000[-4]
+  const p = n => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset(), h = Math.trunc(off / 60), m = Math.abs(off % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.000[${h}${m ? '.' + p(m) : ''}]`;
+}
+// FNV-1a in four differently seeded lanes → 32 hex characters. FROZEN: FITIDs and account numbers
+// are built from it, and Quicken remembers FITIDs forever — changing this re-imports all history.
+function hash128(str) {
+  let out = '';
+  for (const seed of [0x811c9dc5, 0x050c5d1f, 0x9e3779b9, 0x85ebca6b]) {
+    let h = seed;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    out += (h >>> 0).toString(16).padStart(8, '0');
+  }
+  return out;
+}
+// Quicken links a file to an account by ACCTID; derive a fixed 10-digit number from the Wealthsimple ID.
+const ofxAcctId = id => String(1e9 + parseInt(hash128(String(id)).slice(0, 8), 16) % 9e9);
+// Repeats of the same source row get 0, 1, 2… in source order so each keeps its own FITID.
+function numberRepeats(items, keyOf) {
+  const n = {};
+  items.forEach(it => { const k = keyOf(it); it.occ = n[k] = (n[k] ?? -1) + 1; });
+}
+function ofxHead(bid, now) {
+  return ['OFXHEADER:100', 'DATA:OFXSGML', 'VERSION:102', 'SECURITY:NONE', 'ENCODING:USASCII', 'CHARSET:1252',
+    'COMPRESSION:NONE', 'OLDFILEUID:NONE', 'NEWFILEUID:NONE', '',
+    '<OFX>', '<SIGNONMSGSRSV1>', '<SONRS>', '<STATUS>', '<CODE>0', '<SEVERITY>INFO', '</STATUS>',
+    `<DTSERVER>${ofxNow(now)}`, '<LANGUAGE>ENG', '<FI>', '<ORG>Wealthsimple', `<FID>${bid}`, '</FI>',
+    `<INTU.BID>${bid}`, '</SONRS>', '</SIGNONMSGSRSV1>'];
+}
+const ofxSpan = rows => rows.reduce(([lo, hi], r) => [r._iso < lo ? r._iso : lo, r._iso > hi ? r._iso : hi], ['￿', '']);
 
-// One account per file, with no !Account block: the account is chosen in Quicken's import dialog.
-// Unlike the CSV import, a category written as [Account Name] makes a real transfer in QIF.
-function toQIF(rows) {
-  const L = ['!Type:Bank'];
+// Banking Web Connect IDs from Intuit's Canadian (Windows) institution list.
+const BANK_IDS = [['00002', 'TD Canada Trust'], ['00001', 'BMO'], ['00005', 'CIBC'], ['00015', 'RBC'],
+  ['00025', 'Scotiabank'], ['00013', 'National Bank'], ['05060', 'Simplii'], ['10951', 'Tangerine (Windows only)']];
+
+// One account per file. opts: { bid, accountId (Wealthsimple ID), balance (closing), now: Date }
+function toQFX(rows, opts) {
+  const [start, end] = ofxSpan(rows);
+  const L = ofxHead(opts.bid, opts.now).concat(['<BANKMSGSRSV1>', '<STMTTRNRS>', '<TRNUID>1', '<STATUS>',
+    '<CODE>0', '<SEVERITY>INFO', '</STATUS>', '<STMTRS>', '<CURDEF>CAD', '<BANKACCTFROM>', '<BANKID>000000000',
+    `<ACCTID>${ofxAcctId(opts.accountId)}`, '<ACCTTYPE>CHECKING', '</BANKACCTFROM>', '<BANKTRANLIST>',
+    `<DTSTART>${ofxDate(start)}`, `<DTEND>${ofxDate(end)}`]);
   rows.forEach(r => {
-    L.push('D' + r.date, 'T' + r.amount);
-    if (r.payee) L.push('P' + qifText(r.payee));
-    if (r.memo) L.push('M' + qifText(r.memo));
-    if (r.category) L.push('L' + qifText(r.category));
-    L.push('^');
+    L.push('<STMTTRN>', `<TRNTYPE>${r._interest ? 'INT' : Number(r.amount) < 0 ? 'DEBIT' : 'CREDIT'}`,
+      `<DTPOSTED>${ofxDate(r._iso)}`, `<TRNAMT>${r.amount}`, `<FITID>${r._fitid}`,
+      `<NAME>${sgml(r.payee || r.memo || 'Wealthsimple', 32)}`);
+    if (r.memo) L.push(`<MEMO>${sgml(r.memo)}`);
+    L.push('</STMTTRN>');
   });
+  L.push('</BANKTRANLIST>', '<LEDGERBAL>', `<BALAMT>${Number(opts.balance).toFixed(2)}`, `<DTASOF>${ofxDate(end)}`,
+    '</LEDGERBAL>', '</STMTRS>', '</STMTTRNRS>', '</BANKMSGSRSV1>', '</OFX>');
   return L.join('\r\n') + '\r\n';
 }
 </script>
@@ -398,7 +457,8 @@ function toQIF(rows) {
   const accounts = saved.accounts || {};
   const kinds = saved.kinds || {};
   let dateMode = saved.dateMode === 'effective' ? 'effective' : 'executed';
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds })); } catch (e) {} };
+  let bid = BANK_IDS.some(([id]) => id === saved.bid) ? saved.bid : BANK_IDS[0][0];
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds, bid })); } catch (e) {} };
 
   let items = [], files = [], nextFileId = 1;
 
@@ -485,9 +545,13 @@ function toQIF(rows) {
       : unnamed ? 'Give every ticked account a Quicken name' : 'Ready to download';
     $('dl').title = ok ? '' : why;
     $('stReady').textContent = why;
-    const oneAccount = new Set(rows.map(r => r.account)).size === 1;
-    $('dlQif').disabled = !(ok && oneAccount);
-    $('dlQif').title = !ok ? why : oneAccount ? '' : 'A QIF file holds one account — tick just one to download QIF';
+    const oneAccount = new Set(rows.map(r => r._accountId)).size === 1;
+    const bal = $('closeBal').value.trim().replace(/[$,\s]/g, '');
+    const balOk = /^-?\d+(\.\d+)?$/.test(bal);
+    $('closeDate').textContent = rows.length ? 'on ' + rows[rows.length - 1].date : '';
+    $('dlQfx').disabled = !(rows.length && oneAccount && balOk);
+    $('dlQfx').title = !rows.length ? why : !oneAccount ? 'A QFX file holds one account — tick just one'
+      : !balOk ? 'Enter the closing balance (left panel) to download QFX' : '';
   }
 
   $('dateMode').querySelectorAll('button').forEach(b => {
@@ -516,7 +580,16 @@ function toQIF(rows) {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
   $('dl').addEventListener('click', () => download(toCSV(current()), 'text/csv', '.csv'));
-  $('dlQif').addEventListener('click', () => download(encode1252(toQIF(current())), 'application/octet-stream', '.qif'));
+  $('dlQfx').addEventListener('click', () => {
+    const rows = current();
+    const qfx = toQFX(rows, { bid, accountId: rows[0]._accountId, now: new Date(),
+      balance: $('closeBal').value.trim().replace(/[$,\s]/g, '') });
+    download(encode1252(qfx), 'application/vnd.intu.qfx', '.qfx');
+  });
+  $('bid').innerHTML = BANK_IDS.map(([id, name]) => `<option value="${id}">${esc(name)} (${id})</option>`).join('');
+  $('bid').value = bid;
+  $('bid').addEventListener('change', () => { bid = $('bid').value; save(); });
+  $('closeBal').addEventListener('input', render);
 
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
