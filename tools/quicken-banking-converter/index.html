@@ -129,7 +129,38 @@
   .qk-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px;}
   .qk-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
   .qk-grid .qk-wide{grid-column:1 / -1;}
-  #qkTable td input[type=checkbox]{width:16px;height:16px;accent-color:var(--board);margin:0;}
+  .flow{display:flex;gap:2px;height:14px;border-radius:7px;overflow:hidden;background:var(--panel-2);}
+  .flow-seg{min-width:5px;}
+  .flow-legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:10px;}
+  .flow-key{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:20px;
+    padding:4px 10px;font-size:12.5px;cursor:pointer;color:var(--ink);}
+  .flow-key:hover{background:var(--panel-2);}
+  .flow-key b{font-family:var(--mono);font-weight:600;}
+  .flow-key.active{border-color:var(--board);box-shadow:inset 0 0 0 1px var(--board);}
+  .flow-key[disabled]{cursor:default;color:var(--muted);background:#fff;}
+  .flow-key .sw{width:10px;height:10px;border-radius:3px;flex:none;}
+  .tl{display:block;width:100%;height:104px;margin-top:12px;overflow:visible;}
+  .tl text{font:11px var(--sans);fill:var(--muted);}
+  .tl text.lane{font-weight:600;fill:var(--ink);}
+  .tl-band{fill:var(--panel-2);stroke:var(--line);}
+  .tl-tick{stroke:var(--grid-line);}
+  .tl-link{stroke:var(--accent);stroke-width:1.2;opacity:.75;}
+  .tl-link.kept{stroke-dasharray:3 3;}
+  .tl circle{stroke:#fff;stroke-width:1;}
+  .tl .d-new{fill:var(--board);} .tl .d-quicken,.tl .d-q{fill:var(--accent);} .tl .d-kept{fill:var(--board);stroke:var(--accent);stroke-width:2;}
+  .tl .d-only{fill:#b4bdb9;}
+  .chip{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:2px 8px;font-family:var(--sans);
+    font-size:11.5px;font-weight:600;white-space:nowrap;}
+  .chip.new,.chip.kept{background:#e2f0e8;color:#245c3d;}
+  .chip.q{background:var(--accent-soft);color:#7a4c0f;}
+  .chip.rep{background:var(--together-soft);color:var(--together);}
+  .chip input{width:14px;height:14px;margin:0;accent-color:var(--board);}
+  .why{font-family:var(--sans);font-size:11.5px;color:var(--muted);margin-top:3px;white-space:normal;min-width:180px;max-width:260px;}
+  tr.left-out td{color:var(--muted);}
+  tr.left-out td:not(:first-child){text-decoration:line-through;text-decoration-color:rgba(103,117,111,.55);}
+  tr.st-new td:first-child,tr.st-kept td:first-child{box-shadow:inset 3px 0 0 var(--board);}
+  tr.st-quicken td{background:#fdf5e8;} tr.st-quicken td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
+  tr.st-repeat td{background:#eef4f9;} tr.st-repeat td:first-child{box-shadow:inset 3px 0 0 var(--together);}
   .hidden{display:none !important;}
 
   @media (max-width:880px){
@@ -196,7 +227,7 @@
               <option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></label>
             <label id="qkAccountWrap" class="qk-wide">Quicken account<select id="qkAccount"></select></label>
           </div>
-          <p class="hint">Rows with the same amount as a transaction in the export, within these days, are left out of the download — check them under "Already in Quicken".</p>
+          <p class="hint">Rows with the same amount as a transaction in the export, within these days, are left out of the download — they're marked in amber in the preview, with a tick box to keep any of them.</p>
         </div>
       </section>
 
@@ -215,19 +246,21 @@
           <div id="warnings"></div>
         </div>
 
+        <div class="card hidden" id="flowSection">
+          <div class="card-head">
+            <h2 class="section-title">What happens to your rows</h2>
+            <span class="count-pill" id="flowTotal">0</span>
+          </div>
+          <div class="flow" id="flowBar" aria-hidden="true"></div>
+          <div class="flow-legend" id="flowLegend"></div>
+          <svg class="tl hidden" id="timeline" role="img"></svg>
+          <p class="hint" id="flowNote"></p>
+        </div>
+
         <div class="card hidden" id="kindSection">
           <div class="card-head"><h2 class="section-title">Payees &amp; categories</h2></div>
           <p class="hint" style="margin:0 0 9px">Set once per kind of transaction. Categories should match ones that exist in Quicken; leave blank to categorise after import.</p>
           <div class="scroll"><table class="sec-table" id="kindTable"></table></div>
-        </div>
-
-        <div class="card hidden" id="qkSection">
-          <div class="card-head">
-            <h2 class="section-title">Already in Quicken</h2>
-            <span class="count-pill" id="qkPill">0</span>
-          </div>
-          <p class="hint" style="margin:0 0 9px">These rows match a transaction in your Quicken export, so they're left out of the download. Untick a row to include it anyway.</p>
-          <div class="scroll"><table id="qkTable"></table></div>
         </div>
 
         <div class="card hidden" id="previewSection">
@@ -376,9 +409,9 @@ function convert(objs, name = '') {
 }
 
 // files: [{ id, name, objs }]. Joins exports oldest first. A row repeated in another file
-// (overlapping exports) is dropped; repeats within one file are real (two identical deposits).
+// (overlapping exports) is dropped (returned in `dropped`); repeats within one file are real.
 function combine(files) {
-  const items = [], warnings = [], seen = new Map();
+  const items = [], warnings = [], dropped = [], seen = new Map();
   let dupes = 0;
   const converted = files.map(f => ({ f, res: convert(f.objs, f.name) }));
   const first = c => c.res.items.reduce((m, i) => i.effDate < m ? i.effDate : m, '￿');
@@ -387,8 +420,10 @@ function combine(files) {
     res.warnings.forEach(w => warnings.push(files.length > 1 ? `${f.name} — ${w}` : w));
     res.items.forEach(it => {
       const owner = seen.get(it.key);
-      if (owner !== undefined && owner !== f.id) { dupes++; return; }
-      seen.set(it.key, f.id);
+      if (owner !== undefined && owner.id !== f.id) {
+        dupes++; dropped.push({ ...it, id: f.id + ':' + it.id, file: f.name, dupOf: owner.name }); return;
+      }
+      seen.set(it.key, { id: f.id, name: f.name });
       items.push({ ...it, id: f.id + ':' + it.id, file: f.name });
     });
   });
@@ -399,7 +434,7 @@ function combine(files) {
   items.forEach(it => { (formats[it.accountId] ||= new Set()).add(it.kind.startsWith('Statement|') ? 'statement' : 'activities'); });
   Object.entries(formats).forEach(([id, f]) => { if (f.size > 1)
     warnings.push(`Account ${id} is in both an activities export and a monthly statement — any dates they share will be imported twice. Use one format per account.`); });
-  return { items, warnings };
+  return { items, warnings, dropped };
 }
 
 // "2026-01-31" → "01/31/2026" (the format in Quicken's banking sample)
@@ -563,6 +598,23 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
   });
   return out;
 }
+// For download rows left unmatched: the closest unused Quicken row with the same amount that sits
+// just outside the window — shown in the preview so a near miss is visible. Map(our id → { t, gap }).
+function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach = 14 } = {}) {
+  const cents = a => Math.round((absolute ? Math.abs(a) : a) * 100);
+  const used = new Set(matches.values()), out = new Map();
+  ours.forEach(o => {
+    if (matches.has(o.id)) return;
+    let best = null;
+    theirs.forEach(t => {
+      if (used.has(t) || cents(t.amount) !== cents(o.amount)) return;
+      const gap = Math.abs(dayNum(o.iso) - dayNum(t.iso));
+      if (gap > days && gap <= reach && (!best || gap < best.gap)) best = { t, gap };
+    });
+    if (best) out.set(o.id, best);
+  });
+  return out;
+}
 </script>
 
 <script>
@@ -600,6 +652,7 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
   function refresh() {
     const res = combine(files);
     items = res.items;
+    dropped = res.dropped; repeatOf = new Map(dropped.map(d => [d.id, d.dupOf]));
 
     const counts = {};
     items.forEach(i => { counts[i.file] = (counts[i.file] || 0) + 1; });
@@ -650,7 +703,9 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
     render();
   }
 
-  const allRows = () => buildOutput(items, { dateMode, accounts, kinds });
+  const allRows = (src = items) => buildOutput(src, { dateMode, accounts, kinds });
+  const repeatRows = () => allRows(dropped);
+  let dropped = [], repeatOf = new Map();
 
   /* ----- Already in Quicken: rows matching a Quicken export are left out of the download ----- */
   const qk = { name: '', qx: null, map: null, order: null, account: '', days: 3, keep: {} };
@@ -686,31 +741,120 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
     $('qkAccount').innerHTML = opt('', 'All accounts', !qk.account) + accts.map(a => opt(esc(a), a, a === qk.account)).join('');
     $('qkDays').value = qk.days;
   }
-  function qkRender(all) {
-    const theirs = qkTheirs();
+  // Every row and what happens to it: 'new' (downloads), 'kept' (matches Quicken, kept by you),
+  // 'quicken' (matches Quicken, left out) or 'repeat' (same row in another file, included once).
+  let view = 'all';
+  const rowIso = r => r._iso;
+  const rowLabel = r => [r.payee, r.memo].filter(Boolean).join(' — ');
+  function analyse() {
+    const all = allRows(), theirs = qkTheirs();
+    const ours = all.map(r => ({ id: r._id, iso: rowIso(r), amount: Number(r.amount) }));
+    const opts = { days: qk.days, absolute: false };
+    qkLast = qk.qx ? matchExisting(ours, theirs, opts) : new Map();
+    const near = qk.qx ? nearMisses(ours, theirs, qkLast, opts) : new Map();
+    const list = all.map(r => ({ r, match: qkLast.get(r._id), near: near.get(r._id),
+        status: qkLast.has(r._id) ? (qk.keep[r._id] ? 'kept' : 'quicken') : 'new' }))
+      .concat(repeatRows().map(r => ({ r, status: 'repeat', dupOf: repeatOf.get(r._id) })));
+    list.sort((a, b) => rowIso(a.r) < rowIso(b.r) ? -1 : rowIso(a.r) > rowIso(b.r) ? 1 : 0);
+    return { list, theirs, outside: items.filter(it => !(accounts[it.accountId] || {}).include).length };
+  }
+  const downloads = x => x.status === 'new' || x.status === 'kept';
+  // What gets downloaded: new rows, plus matches you chose to keep.
+  const current = () => analyse().list.filter(downloads).map(x => x.r);
+  // The 'Already in Quicken' filter keeps rows you untick in view (as 'Keeping') instead of moving them away.
+  const inView = x => view === 'all' || (view === 'new' ? downloads(x) : view === 'quicken' ? !!x.match : x.status === view);
+
+  const FLOW = [['new', 'Downloading', 'var(--board)'], ['quicken', 'Already in Quicken', 'var(--accent)'],
+    ['repeat', 'Repeated in another file', 'var(--together)'], ['outside', 'In unticked accounts', '#c9d1cd']];
+  function renderFlow({ list, theirs, outside }) {
+    const count = { new: list.filter(downloads).length, quicken: 0, repeat: 0, outside };
+    list.forEach(x => { if (x.status === 'quicken' || x.status === 'repeat') count[x.status]++; });
+    const segs = FLOW.filter(([k]) => count[k]), total = segs.reduce((t, [k]) => t + count[k], 0);
     $('qkCount').textContent = qk.qx ? theirs.length + ' rows' : '';
-    $('qkSection').classList.toggle('hidden', !qkLast.size);
-    $('stSkip').textContent = all.filter(r => qkLast.has(r._id) && !qk.keep[r._id]).length;
-    $('qkPill').textContent = qkLast.size + (qkLast.size === 1 ? ' match' : ' matches');
-    $('qkTable').innerHTML = '<tr><th>Skip</th><th>Date</th><th>From Wealthsimple</th><th>Amount</th><th>In Quicken</th></tr>' +
-      all.filter(r => qkLast.has(r._id)).map(r => {
-        const t = qkLast.get(r._id);
-        return `<tr><td><input type="checkbox" class="qkskip" data-id="${esc(r._id)}"${qk.keep[r._id] ? '' : ' checked'} aria-label="Skip this row"></td>
-          <td>${esc(r._iso)}</td><td>${esc([r.payee, r.memo].filter(Boolean).join(' — '))}</td><td class="num">${esc(r.amount)}</td>
-          <td>${esc(t.iso)}${t.payee ? ' · ' + esc(t.payee) : ''}</td></tr>`;
-      }).join('');
-    $('qkTable').querySelectorAll('.qkskip').forEach(cb => cb.addEventListener('change', () => {
+    $('stSkip').textContent = count.quicken;
+    if (!segs.some(([k]) => k === view)) view = 'all';
+    $('flowSection').classList.toggle('hidden', !total);
+    $('flowTotal').textContent = total + (total === 1 ? ' row' : ' rows') + ' from Wealthsimple';
+    $('flowBar').innerHTML = segs.map(([k, label, col]) =>
+      `<span class="flow-seg" style="flex:${count[k]} 1 0;background:${col}" title="${label}: ${count[k]}"></span>`).join('');
+    const kept = list.filter(x => x.status === 'kept').length;
+    $('flowLegend').innerHTML = segs.map(([k, label, col]) =>
+      `<button type="button" class="flow-key${view === k ? ' active' : ''}" data-v="${k}"${k === 'outside' ? ' disabled' : ''}>
+        <span class="sw" style="background:${col}"></span>${label} <b>${count[k]}</b></button>`).join('') +
+      (kept ? `<span class="hint" style="margin:0">including ${kept} you chose to keep</span>` : '') +
+      (view !== 'all' ? '<button type="button" class="linkbtn" data-v="all">Show all rows</button>' : '');
+    $('flowLegend').querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
+      view = view === b.dataset.v ? 'all' : b.dataset.v; render();
+    }));
+    $('flowNote').textContent = !qk.qx ? 'Add a Quicken export (left) to see which of these are already in Quicken.'
+      : `Compared with ${theirs.length} transaction${theirs.length === 1 ? '' : 's'} in ${qk.account || 'your Quicken export'}: same amount, at most ${qk.days} day${qk.days === 1 ? '' : 's'} apart.`;
+    drawTimeline(list, theirs);
+  }
+
+  // Two lanes — what Quicken already has, and what's coming from Wealthsimple — with a line joining
+  // each matched pair, so the overlap (and anything left over on either side) is visible at a glance.
+  function drawTimeline(list, theirs) {
+    const svg = $('timeline'), ws = list.filter(x => x.status !== 'repeat');
+    svg.classList.toggle('hidden', !qk.qx || !ws.length);
+    if (!qk.qx || !ws.length) return;
+    const W = Math.max(svg.clientWidth || svg.parentNode.clientWidth || 600, 280), H = 104, L = 92, R = 14, yQ = 30, yW = 70;
+    const allDays = ws.map(x => dayNum(rowIso(x.r))).concat(theirs.map(t => dayNum(t.iso)));
+    let d0 = Math.min(...allDays), d1 = Math.max(...allDays);
+    if (d1 - d0 < 20) { d0 -= 10; d1 += 10; }
+    const X = d => L + (d - d0) / (d1 - d0) * (W - L - R);
+    const span = (ds, y) => ds.length ? `<rect class="tl-band" x="${X(Math.min(...ds)) - 7}" y="${y - 10}" width="${X(Math.max(...ds)) - X(Math.min(...ds)) + 14}" height="20" rx="10"/>` : '';
+    const stack = {}, place = (d, y) => { const k = y + ':' + Math.round(X(d) / 5), n = stack[k] = (stack[k] ?? -1) + 1;
+      return [X(d), y + (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 4]; };
+    const fmt = d => new Date(d * 864e5).toISOString().slice(0, 10);
+    const ticks = [];
+    for (let t = new Date(d0 * 864e5); t <= new Date(d1 * 864e5); t.setUTCMonth(t.getUTCMonth() + 1, 1)) {
+      const m = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1)) / 864e5;
+      if (m >= d0) ticks.push(m);
+    }
+    const every = Math.ceil(ticks.length / Math.max(1, Math.floor((W - L) / 46)));
+    const mon = d => new Date(d * 864e5).toLocaleString('en-CA', { month: 'short', timeZone: 'UTC' });
+    // Label the month the axis starts in too, unless a month line sits right at the left edge.
+    const startLabel = !ticks.length || X(ticks[0]) - X(d0) > 40 ? `<text x="${X(d0)}" y="${H - 2}">${mon(d0)}</text>` : '';
+    const used = new Map(), pos = new Map();
+    list.forEach(x => { if (x.match) used.set(x.match, x); });
+    let links = '', dots = '';
+    theirs.forEach(t => {
+      const [cx, cy] = place(dayNum(t.iso), yQ); pos.set(t, [cx, cy]);
+      dots += `<circle class="${used.has(t) ? 'd-q' : 'd-only'}" cx="${cx}" cy="${cy}" r="3.6"><title>${esc(t.iso)} · ${esc(t.amount.toFixed(2))}${t.payee ? ' · ' + esc(t.payee) : ''} — ${used.has(t) ? 'matches a Wealthsimple row' : 'only in Quicken'}</title></circle>`;
+    });
+    ws.forEach(x => {
+      const [cx, cy] = place(dayNum(rowIso(x.r)), yW);
+      if (x.match) { const [qx, qy] = pos.get(x.match); links += `<line class="tl-link${x.status === 'kept' ? ' kept' : ''}" x1="${cx}" y1="${cy}" x2="${qx}" y2="${qy}"/>`; }
+      const what = { new: 'new — downloading', quicken: 'already in Quicken — left out', kept: 'matches Quicken, but you kept it' }[x.status];
+      dots += `<circle class="d-${x.status}" cx="${cx}" cy="${cy}" r="3.6"><title>${esc(rowIso(x.r))} · ${esc(x.r.amount)} · ${esc(rowLabel(x.r))} — ${what}</title></circle>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML =
+      `<text class="lane" x="0" y="${yQ + 4}">In Quicken</text><text class="lane" x="0" y="${yW + 4}">Wealthsimple</text>` +
+      span(theirs.map(t => dayNum(t.iso)), yQ) + span(ws.map(x => dayNum(rowIso(x.r))), yW) +
+      ticks.map((m, i) => `<line class="tl-tick" x1="${X(m)}" x2="${X(m)}" y1="${yQ - 16}" y2="${yW + 14}"/>` +
+        (i % every ? '' : `<text x="${X(m) + 3}" y="${H - 2}">${new Date(m * 864e5).toLocaleString('en-CA', { month: 'short', timeZone: 'UTC' })}${new Date(m * 864e5).getUTCMonth() === 0 ? ' ' + new Date(m * 864e5).getUTCFullYear() : ''}</text>`)).join('') +
+      startLabel + links + dots;
+    svg.setAttribute('aria-label', `Timeline from ${fmt(d0)} to ${fmt(d1)}: ${theirs.length} transactions in Quicken, ${ws.length} from Wealthsimple, ${used.size} matched.`);
+  }
+  let resizeTimer;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (qk.qx && files.length) render(); }, 150); });
+
+  // First preview column: what happens to the row, why, and (for matches) the tick box.
+  function statusCell(x) {
+    const id = esc(x.r._id), m = x.match;
+    const matched = m ? `<div class="why">matches ${esc(m.iso)} · ${esc(m.amount.toFixed(2))}${m.payee ? ' · ' + esc(m.payee) : ''}</div>` : '';
+    if (x.status === 'quicken') return `<label class="chip q"><input type="checkbox" class="qkskip" data-id="${id}" checked aria-label="Leave out (already in Quicken)">In Quicken</label>${matched}`;
+    if (x.status === 'kept') return `<label class="chip kept"><input type="checkbox" class="qkskip" data-id="${id}" aria-label="Leave out (already in Quicken)">Keeping</label>${matched}`;
+    if (x.status === 'repeat') return `<span class="chip rep">Repeat</span><div class="why">also in ${esc(x.dupOf || 'another file')} — included once</div>`;
+    const n = x.near;
+    return `<span class="chip new">New</span>` + (n ? `<div class="why">Quicken has ${esc(n.t.amount.toFixed(2))} on ${esc(n.t.iso)} — ${n.gap} days off, outside the match window</div>` : '');
+  }
+  function bindSkips() {
+    $('preview').querySelectorAll('.qkskip').forEach(cb => cb.addEventListener('change', () => {
       if (cb.checked) delete qk.keep[cb.dataset.id]; else qk.keep[cb.dataset.id] = true;
       render();
     }));
-  }
-  // What gets downloaded: everything except matched rows that are still ticked to skip.
-  function current() {
-    const all = allRows();
-    qkLast = qk.qx ? matchExisting(all.map(r => ({ id: r._id, iso: r._iso, amount: Number(r.amount) })), qkTheirs(),
-      { days: qk.days, absolute: false }) : new Map();
-    qkRender(all);
-    return all.filter(r => !qkLast.has(r._id) || qk.keep[r._id]);
   }
   $('qkFile').addEventListener('change', e => { if (e.target.files[0]) qkLoad(e.target.files[0]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('qkDrop').addEventListener(ev, e => { e.preventDefault(); $('qkDrop').classList.add('over'); }));
@@ -734,11 +878,14 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
   $('qkDays').addEventListener('change', () => { qk.days = +$('qkDays').value; render(); });
 
   function render() {
-    const rows = current();
+    const a = analyse(), rows = a.list.filter(downloads).map(x => x.r);
+    renderFlow(a);
     const cols = ['date','payee','amount','category','account','memo'];
-    $('preview').innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
-      rows.map(r => '<tr>' + cols.map(c => `<td${c === 'amount' ? ' class="num"' : ''}>${esc(r[c])}</td>`).join('') + '</tr>').join('');
-    $('count').textContent = rows.length + (rows.length === 1 ? ' transaction' : ' transactions');
+    $('preview').innerHTML = '<tr><th>status</th>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
+      a.list.filter(inView).map(x => `<tr class="st-${x.status}${downloads(x) ? '' : ' left-out'}"><td>${statusCell(x)}</td>` +
+        cols.map(c => `<td${c === 'amount' ? ' class="num"' : ''}>${esc(x.r[c])}</td>`).join('') + '</tr>').join('');
+    bindSkips();
+    $('count').textContent = rows.length + ' to download';
     $('stTx').textContent = rows.length;
     $('stNet').textContent = rows.reduce((s, r) => s + Number(r.amount), 0).toFixed(2);
     const unnamed = rows.some(r => !r.account);

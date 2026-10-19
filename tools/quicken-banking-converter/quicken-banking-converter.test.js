@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting, nearMisses })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -175,4 +175,22 @@ test('warns when one account comes from both an activities export and a monthly 
     { id: 2, name: 'Chq-monthly-statement-transactions-AB12CD34CAD-2026-01-01.csv', objs: st }]);
   assert.ok(warnings.some(w => /AB12CD34CAD is in both an activities export and a monthly statement/.test(w)));
   assert.ok(!Q.combine([{ id: 1, name: 'a.csv', objs: exp(ROWS[0]) }]).warnings.length);
+});
+
+test('nearMisses: an unmatched row with the same amount just outside the window is reported, closest first', () => {
+  const ours = [{ id: 'a', iso: '2026-01-28', amount: -100 }, { id: 'b', iso: '2026-03-01', amount: 5 }, { id: 'c', iso: '2026-06-01', amount: 7 }];
+  const theirs = [{ iso: '2026-02-03', amount: -100 }, { iso: '2026-02-01', amount: -100 }, { iso: '2026-03-01', amount: 5 }, { iso: '2026-07-01', amount: 7 }];
+  const m = Q.matchExisting(ours, theirs, { days: 3 });
+  const n = Q.nearMisses(ours, theirs, m, { days: 3 });
+  assert.deepEqual([...m.keys()], ['b']);
+  assert.equal(n.get('a').gap, 4);               // Feb 1 beats Feb 3
+  assert.equal(n.get('a').t.iso, '2026-02-01');
+  assert.ok(!n.has('b') && !n.has('c'));          // b matched; c is 30 days off, past the 14-day reach
+});
+
+test('combine returns the rows it dropped as repeats, naming the file they were already in', () => {
+  const feb = exp('2026-02-02,10:00:00,,ACC1,Chequing,MoneyMovement,AFT_IN,Direct deposit received,,,,CAD,60,,,60');
+  const res = Q.combine([{ id: 1, name: 'jan.csv', objs: exp(...ROWS) }, { id: 2, name: 'jan-again.csv', objs: exp(...ROWS) }, { id: 3, name: 'feb.csv', objs: feb }]);
+  assert.equal(res.dropped.length, 5);   // the 6th sample row is a trade, skipped
+  assert.ok(res.dropped.every(d => d.dupOf === 'jan.csv' && d.id.startsWith('2:')));
 });
