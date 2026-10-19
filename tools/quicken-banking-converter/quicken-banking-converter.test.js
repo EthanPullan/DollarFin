@@ -77,7 +77,9 @@ test('a file that is neither an activities export nor a statement is rejected wi
 
 test('toCSV writes Quicken\'s banking header verbatim and quotes fields that need it', () => {
   const rows = Q.buildOutput(load().items, { ...OPTS, kinds: { 'MoneyMovement|AFT_IN|in': { payee: 'Pay, Inc.' } } });
-  const lines = Q.toCSV(rows).split('\r\n');
+  const csv = Q.toCSV(rows);
+  assert.ok(!csv.includes('\r') && csv.endsWith('\n'), 'LF line endings, like Quicken\'s sample');
+  const lines = csv.split('\n');
   assert.equal(lines[0], 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum');
   assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,My Chequing,,Direct deposit received,');
 });
@@ -209,4 +211,11 @@ test('a CSV report yields the categories and accounts its rows use, without tran
     '1/4/2026,Savings,C,Salary,10', ',,,Grand Total,-4'].join('\n'));
   assert.deepEqual(plain(qx.categories), ['Groceries', 'Salary']);
   assert.deepEqual(plain(qx.accounts.map(a => a.name)), ['Chq', 'Savings']);
+});
+
+test('date format choice: MM/DD/YYYY by default, or YYYY-MM-DD / DD/MM/YYYY', () => {
+  const dates = dateFmt => Q.buildOutput(load().items, { ...OPTS, dateFmt }).map(r => r.date);
+  assert.deepEqual(plain(dates()), ['01/05/2026', '01/05/2026', '01/10/2026', '02/01/2026']);
+  assert.deepEqual(plain(dates('ymd')), ['2026-01-05', '2026-01-05', '2026-01-10', '2026-02-01']);
+  assert.deepEqual(plain(dates('dmy')), ['05/01/2026', '05/01/2026', '10/01/2026', '01/02/2026']);
 });

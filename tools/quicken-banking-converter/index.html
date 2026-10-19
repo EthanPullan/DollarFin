@@ -204,6 +204,13 @@
           <button type="button" data-v="executed" class="active">Executed date</button>
           <button type="button" data-v="effective">Effective date</button>
         </div>
+        <label class="field-label" for="dateFmt" style="margin-top:12px">Date format in the file</label>
+        <select id="dateFmt">
+          <option value="mdy">MM/DD/YYYY (Quicken's sample)</option>
+          <option value="ymd">YYYY-MM-DD</option>
+          <option value="dmy">DD/MM/YYYY</option>
+        </select>
+        <p class="hint">If Quicken rejects the file, pick the format your Windows short date uses.</p>
         <p class="hint">Executed date is the "executed at" date in the description — the same date the investment converter uses, so transfers between accounts line up.</p>
       </section>
 
@@ -439,10 +446,15 @@ function combine(files) {
   return { items, warnings, dropped };
 }
 
-// "2026-01-31" → "01/31/2026" (the format in Quicken's banking sample)
-const usDate = iso => { const [y, m, d] = iso.split('-'); return `${m}/${d}/${y}`; };
+// Quicken's banking sample uses MM/DD/YYYY, but Quicken Canada's CSV import is reported to follow the
+// Windows short-date setting instead — so the format is a choice.
+const DATE_FORMATS = { mdy: 'MM/DD/YYYY', ymd: 'YYYY-MM-DD', dmy: 'DD/MM/YYYY' };
+function formatDate(iso, fmt = 'mdy') {
+  const [y, m, d] = iso.split('-');
+  return fmt === 'ymd' ? iso : fmt === 'dmy' ? `${d}/${m}/${y}` : `${m}/${d}/${y}`;
+}
 
-// opts: { dateMode, accounts: { [accountId]: { name, include } }, kinds: { [kind]: { payee, category } } }
+// opts: { dateMode, dateFmt, accounts: { [accountId]: { name, include } }, kinds: { [kind]: { payee, category } } }
 function buildOutput(items, opts) {
   return items
     .filter(it => (opts.accounts[it.accountId] || {}).include)
@@ -451,7 +463,7 @@ function buildOutput(items, opts) {
     .map(({ it, iso }) => {
       const k = opts.kinds[it.kind] || {};
       const r = Object.fromEntries(FIELDS.map(h => [h, '']));
-      r.date = usDate(iso);
+      r.date = formatDate(iso, opts.dateFmt);
       r.payee = (k.payee ?? it.defaultPayee).trim();
       r.amount = it.amt.toFixed(2);
       r.category = (k.category || '').trim();
@@ -463,8 +475,9 @@ function buildOutput(items, opts) {
     });
 }
 
+// Line endings match Quicken's sample file (LF).
 function toCSV(rows) {
-  return [HEADER_LINE].concat(rows.map(r => FIELDS.map(h => csvField(r[h])).join(','))).join('\r\n') + '\r\n';
+  return [HEADER_LINE].concat(rows.map(r => FIELDS.map(h => csvField(r[h])).join(','))).join('\n') + '\n';
 }
 
 /* ----- "Already in Quicken" check ----- */
@@ -647,9 +660,10 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
   const accounts = saved.accounts || {};
   const kinds = saved.kinds || {};
   let dateMode = saved.dateMode === 'effective' ? 'effective' : 'executed';
+  let dateFmt = DATE_FORMATS[saved.dateFmt] ? saved.dateFmt : 'mdy';
   // Category and account names from the last Quicken export, offered as dropdown suggestions.
   let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [];
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, dateFmt, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
   function fillLists() {
     $('catList').innerHTML = qkCats.map(c => `<option value="${esc(c)}">`).join('');
     $('acctList').innerHTML = qkAccts.map(a => `<option value="${esc(a)}">`).join('');
@@ -728,7 +742,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     render();
   }
 
-  const allRows = (src = items) => buildOutput(src, { dateMode, accounts, kinds });
+  const allRows = (src = items) => buildOutput(src, { dateMode, dateFmt, accounts, kinds });
   const repeatRows = () => allRows(dropped);
   let dropped = [], repeatOf = new Map();
 
@@ -946,13 +960,14 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     const rows = current();
     const blob = new Blob([toCSV(rows)], { type: 'text/csv' });
     const a = document.createElement('a');
-    const iso = d => d.replace(/(\d+)\/(\d+)\/(\d+)/, '$3-$1-$2');
     a.href = URL.createObjectURL(blob);
-    a.download = `quicken-banking-${iso(rows[0].date)}-to-${iso(rows[rows.length - 1].date)}.csv`;
+    a.download = `quicken-banking-${rows[0]._iso}-to-${rows[rows.length - 1]._iso}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
+  $('dateFmt').value = dateFmt;
+  $('dateFmt').addEventListener('change', () => { dateFmt = $('dateFmt').value; save(); render(); });
   fillLists();
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
