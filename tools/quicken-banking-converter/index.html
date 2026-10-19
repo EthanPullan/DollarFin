@@ -707,15 +707,15 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     $('acctSection').classList.toggle('hidden', accts.size === 0);
     $('dateTitle').textContent = (accts.size ? '3' : '2') + ' · Transaction date';
     $('accounts').querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {
-      accounts[cb.dataset.a].include = cb.checked; cb.closest('.acct').classList.toggle('off', !cb.checked); save(); render();
+      accounts[cb.dataset.a].include = cb.checked; save(); refresh();
     }));
     $('accounts').querySelectorAll('input[type=text]').forEach(inp => inp.addEventListener('input', () => {
       accounts[inp.dataset.a].name = inp.value; save(); render();
     }));
 
-    // One row per kind of transaction.
+    // One row per kind of transaction, from ticked accounts only.
     const ks = new Map();
-    items.forEach(i => { const k = ks.get(i.kind); if (k) k.n++; else ks.set(i.kind, { n: 1, it: i }); });
+    items.filter(i => (accounts[i.accountId] || {}).include).forEach(i => { const k = ks.get(i.kind); if (k) k.n++; else ks.set(i.kind, { n: 1, it: i }); });
     $('kindTable').innerHTML = '<tr><th>Transaction</th><th>Rows</th><th>Payee</th><th>Category</th></tr>' +
       [...ks].map(([kind, { n, it }]) => `<tr><td title="${esc(it.kindDetail)}">${esc(it.kindLabel)}${it.kindDetail ? ` <span class="fmeta">${esc(it.kindDetail)}</span>` : ''}</td>
         <td class="num">${n}</td>
