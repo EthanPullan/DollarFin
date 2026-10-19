@@ -144,7 +144,7 @@
 <body>
 <div class="app">
   <header class="toolbar">
-    <div class="brand"><span class="mark"></span>Quicken Banking Converter <small>Wealthsimple activities → Quicken CSV</small></div>
+    <div class="brand"><span class="mark"></span>Quicken Banking Converter <small>Wealthsimple activities &amp; statements → Quicken CSV</small></div>
     <div class="spacer"></div>
     <button class="btn primary" id="dl" disabled><span class="ic">⭳</span>Download Quicken CSV</button>
   </header>
@@ -152,9 +152,9 @@
   <div class="main">
     <aside class="panel">
       <section class="section">
-        <h2 class="section-title">1 · Activity exports</h2>
+        <h2 class="section-title">1 · Exports &amp; statements</h2>
         <label class="drop" id="drop" for="file">
-          <b>Drop activities-export CSVs here</b>or click to choose — pick several at once, or add more later
+          <b>Drop Wealthsimple CSVs here</b>activities exports or monthly statements — pick several at once, or add more later
         </label>
         <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
         <ul class="files" id="fileList"></ul>
@@ -208,7 +208,7 @@
 
     <section class="stage">
       <div class="stage-scroll">
-        <div class="empty" id="emptyState">Choose one or more Wealthsimple activities-export CSVs on the left to preview the Quicken import.</div>
+        <div class="empty" id="emptyState">Choose Wealthsimple activities exports or monthly-statement CSVs on the left to preview the Quicken import.</div>
 
         <div class="card hidden" id="warnSection">
           <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
@@ -303,12 +303,51 @@ function defaultPayee(subType, dir, desc) {
   return desc;
 }
 
-// Returns { items, warnings }. Every row with cash is a banking transaction; rows with a
-// symbol are trades and are left to the investment converter.
-function convert(objs) {
+// Monthly-statement filenames look like "<Account name>-monthly-statement-transactions-<ID>-YYYY-MM-DD.csv".
+const statementAccount = name => ({
+  id: (name.match(/-([A-Z0-9]{8,})-\d{4}-\d{2}-\d{2}(?:\s*\(\d+\))?\.csv$/i) || [])[1] || name,
+  label: name.replace(/\.csv$/i, '').split(/-monthly-statement/i)[0].replace(/_+/g, ' ').trim() || 'Wealthsimple',
+});
+const STATEMENT_PAYEE = { INT: 'Interest', FPLINT: 'Interest', FEE: 'Fee', CONT: 'Contribution',
+  TRFIN: 'Transfer in', TRFINTF: 'Transfer in', TRFOUT: 'Transfer out', TRFOUTTF: 'Transfer out' };
+
+// A cash account's monthly statement (date, transaction, description, amount, balance, currency).
+// Trades belong to the investment converter; zero-cash stock-lending rows have nothing to record.
+function convertStatement(objs, name) {
+  const items = [], warnings = [], acct = statementAccount(name);
+  let trades = 0;
+  objs.forEach((o, idx) => {
+    const code = (o.transaction || '').toUpperCase(), amt = parseFloat(String(o.amount).replace(/,/g, ''));
+    if (/^(BUY|SELL|DIV)$/.test(code)) { trades++; return; }
+    if (/^(LOAN|RECALL)$/.test(code) && !amt) return;
+    if (o.currency && o.currency.toUpperCase() !== 'CAD') return;
+    if (!Number.isFinite(amt)) { warnings.push(`Line ${idx + 2}: no cash amount, row skipped.`); return; }
+    const desc = cleanDesc(o.description || ''), dir = amt < 0 ? 'out' : 'in';
+    items.push({
+      id: idx, line: idx + 2, amt, desc,
+      effDate: o.date,
+      execDate: ((o.description || '').match(EXEC_RE) || [])[1] || o.date,
+      accountId: acct.id, accountType: acct.label,
+      kind: ['Statement', code, dir].join('|'),
+      kindLabel: desc || code, kindDetail: code,
+      defaultPayee: STATEMENT_PAYEE[code] || desc,
+      key: Object.values(o).join('|'),
+    });
+  });
+  if (trades) {
+    warnings.push(`${trades} trade row(s) skipped — this looks like an investment account; use the Quicken Investment Converter for it.`);
+    items.forEach(i => { i.investment = true; });
+  }
+  return { items, warnings };
+}
+
+// Returns { items, warnings }. Takes an activities export (every row with cash is a banking
+// transaction; rows with a symbol are trades, left to the investment converter) or a monthly statement.
+function convert(objs, name = '') {
   const items = [], warnings = [];
+  if (objs.length && ['date', 'transaction', 'amount'].every(k => k in objs[0])) return convertStatement(objs, name);
   if (!objs.length || !('net_cash_amount' in objs[0]) || !('effective_date' in objs[0])) {
-    warnings.push('This doesn\'t look like a Wealthsimple activities export (no effective_date / net_cash_amount columns), file skipped.');
+    warnings.push('This doesn\'t look like a Wealthsimple activities export or monthly statement, file skipped.');
     return { items, warnings };
   }
   let trades = 0;
@@ -341,7 +380,7 @@ function convert(objs) {
 function combine(files) {
   const items = [], warnings = [], seen = new Map();
   let dupes = 0;
-  const converted = files.map(f => ({ f, res: convert(f.objs) }));
+  const converted = files.map(f => ({ f, res: convert(f.objs, f.name) }));
   const first = c => c.res.items.reduce((m, i) => i.effDate < m ? i.effDate : m, '￿');
   converted.sort((a, b) => first(a) < first(b) ? -1 : first(a) > first(b) ? 1 : 0);
   converted.forEach(({ f, res }) => {
@@ -548,7 +587,7 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
       if (i >= 0) files[i] = entry; else files.push(entry);
     }
     if (empty.length) alert('Skipped (looks empty): ' + empty.join(', '));
-    const firstDate = f => f.objs.reduce((m, o) => (o.effective_date || '￿') < m ? o.effective_date : m, '￿');
+    const firstDate = f => f.objs.reduce((m, o) => { const d = o.effective_date || o.date || '\uffff'; return d < m ? d : m; }, '\uffff');
     files.sort((a, b) => firstDate(a) < firstDate(b) ? -1 : firstDate(a) > firstDate(b) ? 1 : 0);
     refresh();
   }
@@ -574,7 +613,9 @@ function matchExisting(ours, theirs, { days = 3, absolute = false } = {}) {
     // Accounts seen in the exports; new ones get a default name and are ticked only if they hold cash.
     const accts = new Map();
     items.forEach(i => { if (!accts.has(i.accountId)) accts.set(i.accountId, i.accountType); });
-    accts.forEach((type, id) => { accounts[id] ||= { name: type || 'Wealthsimple', include: isCashAccount(type) }; });
+    // Statement accounts (no account type in the file) start ticked unless they hold trades.
+    const fromStatement = id => items.some(i => i.accountId === id && i.kind.startsWith('Statement|') && !i.investment);
+    accts.forEach((type, id) => { accounts[id] ||= { name: type || 'Wealthsimple', include: isCashAccount(type) || fromStatement(id) }; });
     $('accounts').innerHTML = [...accts].map(([id, type]) => `<div class="acct${accounts[id].include ? '' : ' off'}">
         <div class="acct-head"><label class="check"><input type="checkbox" data-a="${esc(id)}" ${accounts[id].include ? 'checked' : ''}>${esc(type || 'Account')}</label>
           <span class="acct-id">${esc(id)}</span></div>

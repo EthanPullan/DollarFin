@@ -69,10 +69,10 @@ test('combine sorts exports oldest first and drops rows repeated across files', 
   assert.ok(warnings.some(w => /5 row\(s\) appeared in more than one export/.test(w)));
 });
 
-test('a file that is not an activities export is rejected with a warning', () => {
-  const { items, warnings } = Q.convert(Q.toObjects(Q.parseCSV('date,transaction,description,amount\n2026-01-01,FEE,x,-1')));
+test('a file that is neither an activities export nor a statement is rejected with a warning', () => {
+  const { items, warnings } = Q.convert(Q.toObjects(Q.parseCSV('date, payee, fipayee-unused,amount\n02/15/2026,Someone,,-1.00')));
   assert.equal(items.length, 0);
-  assert.match(warnings[0], /doesn't look like a Wealthsimple activities export/);
+  assert.match(warnings[0], /doesn't look like a Wealthsimple activities export or monthly statement/);
 });
 
 test('toCSV writes Quicken\'s banking header verbatim and quotes fields that need it', () => {
@@ -146,4 +146,24 @@ test('matchExisting: same amount within the window, one Quicken row per download
   assert.deepEqual([...m.keys()].sort(), ['a', 'c']);     // one $200 in Quicken → only one of the two deposits
   assert.equal(Q.matchExisting(ours, theirs, { days: 1 }).has('c'), false);   // 2 days apart
   assert.equal(Q.matchExisting(ours, theirs, { days: 3, absolute: true }).has('e'), true);
+});
+
+test('a cash account monthly statement: account from the filename, kinds by code, trades and lending skipped', () => {
+  const st = (...lines) => Q.toObjects(Q.parseCSV(['"date","transaction","description","amount","balance","currency"', ...lines].join('\n')));
+  const name = '__My_savings-monthly-statement-transactions-AB12CD34CAD-2026-03-01.csv';
+  const { items, warnings } = Q.combine([{ id: 1, name, objs: st(
+    '"2026-03-01","INT","Interest earned","0.04","10.04","CAD"',
+    '"2026-03-17","TRFINTF","Transfer in","50.0","60.04","CAD"',
+    '"2026-03-17","TRFINTF","Transfer in","50.0","110.04","CAD"',
+    '"2026-03-18","TRFOUTTF","Transfer out (executed at 2026-03-19)","-100.0","10.04","CAD"',
+    '"2026-03-20","LOAN","XYZ - Example ETF: 1.0000 Shares on loan","0.0","0.0","XYZ"') }]);
+  assert.equal(warnings.length, 0);
+  assert.equal(items.length, 4);
+  assert.deepEqual(plain([...new Set(items.map(i => [i.accountId, i.accountType].join(' / ')))]), ['AB12CD34CAD / My savings']);
+  const rows = Q.buildOutput(items, { dateMode: 'executed', kinds: {}, accounts: { AB12CD34CAD: { name: 'Savings', include: true } } });
+  assert.deepEqual(plain(rows.map(r => [r.date, r.payee, r.amount])), [
+    ['03/01/2026', 'Interest', '0.04'], ['03/17/2026', 'Transfer in', '50.00'], ['03/17/2026', 'Transfer in', '50.00'],
+    ['03/19/2026', 'Transfer out', '-100.00']]);
+  const trades = Q.convert(st('"2026-03-02","BUY","XYZ - Example ETF: Bought 1 shares at $10.00 per share","-10.0","0.0","CAD"'), name);
+  assert.match(trades.warnings[0], /use the Quicken Investment Converter/);
 });

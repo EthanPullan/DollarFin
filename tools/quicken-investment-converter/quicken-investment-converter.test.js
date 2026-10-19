@@ -188,3 +188,10 @@ test('Already in Quicken: investment rows match a QIF export by date and amount,
     Q.quickenRows(qx, qx.map, qx.order), { days: 3, absolute: true });
   assert.deepEqual(plain(rows.filter(r => m.has(r._id)).map(r => r.action)), ['Bought', 'MiscExp']);
 });
+
+test('TRFOUTTF (tax-free cash transfer out) becomes an XOut', () => {
+  const { items, warnings } = Q.convert(month('"2026-03-17","TRFOUTTF","Transfer out","-600.0","0.0","CAD"'));
+  assert.equal(warnings.length, 0);
+  const [r] = Q.buildOutput(items, OPTS);
+  assert.deepEqual(plain([r.action, r.amount, r.memo, r.transferAccount]), ['XOut', '600.00', 'Transfer out', 'Chequing']);
+});
