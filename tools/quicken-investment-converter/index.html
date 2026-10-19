@@ -189,7 +189,8 @@
         <h2 class="section-title">2 · Quicken settings</h2>
         <div class="field">
           <label class="field-label" for="account">Investment account name</label>
-          <input id="account" type="text" placeholder="e.g. Brokerage" autocomplete="off">
+          <input id="account" type="text" placeholder="e.g. Brokerage" list="acctList" autocomplete="off">
+          <datalist id="acctList"></datalist>
           <p class="hint">Must match the Quicken account you're importing into.</p>
         </div>
         <div class="field">
@@ -233,7 +234,7 @@
       </section>
 
       <section class="section">
-        <p class="hint" style="margin:0">Account names (per Wealthsimple account), security names and the date choice are remembered on this device only.
+        <p class="hint" style="margin:0">Account names (per Wealthsimple account), security names, the date choice and the account list from your Quicken export are remembered on this device only.
           <button type="button" class="linkbtn" id="forget">Forget them</button></p>
       </section>
     </aside>
@@ -475,6 +476,7 @@ const QK_COLS = {
   credit: /^(deposit|deposits|credit|credits|inflow|receive|increase)$/i,
   payee: /^(payee|description|desc)$/i,
   account: /^account( name)?$/i,
+  category: /^category$/i,
 };
 // A QIF exported from Quicken (File › Export) holds every account; only transaction sections are read,
 // each row tagged with its account. Dates look like 1/13'26 (apostrophe = 2000s) or 01/13/2026.
@@ -485,11 +487,14 @@ function qifDate(s) {
   const y = m[4].length === 4 ? m[4] : String((m[3] === "'" ? 2000 : 1900) + +m[4]);
   return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
 }
+// Also collects the category list (!Type:Cat) and account names, offered as suggestions in the tools.
 function readQuickenQif(text) {
-  const body = [];
-  let account = '', listAccount = '', inTxns = false, rec = {};
+  const body = [], categories = new Set(), accounts = new Map();
+  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, rec = {};
   text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
     if (line[0] === '!') {
+      inCat = /^!Type:Cat/i.test(line);
+      inAcct = /^!Account/i.test(line);
       if (/^!Account/i.test(line)) inTxns = false;
       else if (QIF_TXN_TYPES.test(line)) { inTxns = true; account = listAccount; }
       else if (/^!Type:/i.test(line)) inTxns = false;
@@ -497,7 +502,15 @@ function readQuickenQif(text) {
       return;
     }
     const code = line[0], val = line.slice(1).trim();
-    if (!inTxns) { if (code === 'N') listAccount = val; return; }   // N inside an !Account block = its name
+    if (inCat) { if (code === 'N' && val) categories.add(val); return; }
+    if (!inTxns) {
+      if (!inAcct) return;   // memorized payees, securities, prices… also use N and T
+      // inside an !Account block: N = name, T = type
+      if (code === 'N') listAccount = val;
+      else if (code === 'T') listType = val;
+      else if (code === '^' && listAccount) accounts.set(listAccount, listType);
+      return;
+    }
     if (code === '^') {
       const iso = qifDate(rec.D || ''), amount = rec.T ?? rec.U;
       if (iso && amount !== undefined)
@@ -505,7 +518,8 @@ function readQuickenQif(text) {
       rec = {};
     } else if ('DTUPMNY'.includes(code) && !(code in rec)) rec[code] = val;
   });
-  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true };
+  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true,
+    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
 // Amount is either one column ({ amount }) or a deposit/payment pair ({ credit, debit }).
@@ -521,7 +535,9 @@ function readQuickenExport(text) {
   const amount = col(QK_COLS.amount), credit = col(QK_COLS.credit), debit = col(QK_COLS.debit);
   if (amount >= 0) map.amount = amount; else { map.credit = credit; map.debit = debit; }
   const order = detectDateOrder(body.map(r => r[map.date]));
-  return { header, body, map, order };
+  // Suggestions from a CSV report: the categories and accounts its rows use ([Transfer] entries aren't categories).
+  const distinct = i => i < 0 ? [] : [...new Set(body.map(r => r[i]).filter(v => v && !/^\[/.test(v) && !/total/i.test(v)))].sort((a, b) => a.localeCompare(b));
+  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })) };
 }
 // Transaction rows only: totals, blank lines and split lines without a date are dropped.
 function quickenRows(qx, map, order) {
@@ -692,6 +708,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     const qx = readQuickenExport(await file.text());
     if (!qx) { alert(`Couldn't find a Date column and an Amount (or Payment/Deposit) column in ${file.name}.`); return; }
     Object.assign(qk, { name: file.name, qx, map: { ...qx.map }, order: qx.order, keep: {} });
+    if (qx.accounts.length) { saved.qkAccts = qx.accounts.map(a => a.name); save(); fillLists(); }
     const accts = qkAccounts(), want = $('account').value.trim();
     qk.account = accts.includes(want) ? want : '';
     qkPanel(); render();
@@ -875,7 +892,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
       const r = rows.find(x => x._id === inp.dataset.id);
       inp.classList.toggle('missing', !!r && !r.transferAccount);
     });
-    $('xferNames').innerHTML = [...new Set([$('xfer').value.trim(), ...Object.values(xferByRow).map(v => v.trim())].filter(Boolean))]
+    $('xferNames').innerHTML = [...new Set([$('xfer').value.trim(), ...Object.values(xferByRow).map(v => v.trim()), ...(saved.qkAccts || [])].filter(Boolean))]
       .map(n => `<option value="${esc(n)}">`).join('');
   }
 
@@ -913,11 +930,16 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
   $('forget').addEventListener('click', () => {
     if (!confirm('Forget the saved account names, security names and date choice on this device?')) return;
     try { localStorage.removeItem(LS); } catch (e) {}
-    saved = { accounts: {} };
+    saved = { accounts: {} }; fillLists();
     Object.keys(secOverrides).forEach(k => delete secOverrides[k]);
     $('account').value = ''; $('xfer').value = ''; shownKey = filledFrom = null;
     refresh();
   });
+  // Account names from the last Quicken export, suggested for the account and transfer-account boxes.
+  function fillLists() {
+    $('acctList').innerHTML = (saved.qkAccts || []).map(a => `<option value="${esc(a)}">`).join('');
+  }
+  fillLists();
   applySavedAccount();
 
   $('dl').addEventListener('click', () => {

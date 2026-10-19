@@ -232,7 +232,7 @@
       </section>
 
       <section class="section">
-        <p class="hint" style="margin:0">Account names, payees and categories are remembered on this device only.
+        <p class="hint" style="margin:0">Account names, payees, categories and the lists from your Quicken export are remembered on this device only.
           <button type="button" class="linkbtn" id="forget">Forget them</button></p>
       </section>
     </aside>
@@ -259,8 +259,10 @@
 
         <div class="card hidden" id="kindSection">
           <div class="card-head"><h2 class="section-title">Payees &amp; categories</h2></div>
-          <p class="hint" style="margin:0 0 9px">Set once per kind of transaction. Categories should match ones that exist in Quicken; leave blank to categorise after import.</p>
+          <p class="hint" style="margin:0 0 9px">Set once per kind of transaction. Categories should match ones that exist in Quicken; leave blank to categorise after import.
+            <span id="catHint"></span></p>
           <div class="scroll"><table class="sec-table" id="kindTable"></table></div>
+          <datalist id="catList"></datalist><datalist id="acctList"></datalist>
         </div>
 
         <div class="card hidden" id="previewSection">
@@ -509,6 +511,7 @@ const QK_COLS = {
   credit: /^(deposit|deposits|credit|credits|inflow|receive|increase)$/i,
   payee: /^(payee|description|desc)$/i,
   account: /^account( name)?$/i,
+  category: /^category$/i,
 };
 // A QIF exported from Quicken (File › Export) holds every account; only transaction sections are read,
 // each row tagged with its account. Dates look like 1/13'26 (apostrophe = 2000s) or 01/13/2026.
@@ -519,11 +522,14 @@ function qifDate(s) {
   const y = m[4].length === 4 ? m[4] : String((m[3] === "'" ? 2000 : 1900) + +m[4]);
   return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
 }
+// Also collects the category list (!Type:Cat) and account names, offered as suggestions in the tools.
 function readQuickenQif(text) {
-  const body = [];
-  let account = '', listAccount = '', inTxns = false, rec = {};
+  const body = [], categories = new Set(), accounts = new Map();
+  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, rec = {};
   text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
     if (line[0] === '!') {
+      inCat = /^!Type:Cat/i.test(line);
+      inAcct = /^!Account/i.test(line);
       if (/^!Account/i.test(line)) inTxns = false;
       else if (QIF_TXN_TYPES.test(line)) { inTxns = true; account = listAccount; }
       else if (/^!Type:/i.test(line)) inTxns = false;
@@ -531,7 +537,15 @@ function readQuickenQif(text) {
       return;
     }
     const code = line[0], val = line.slice(1).trim();
-    if (!inTxns) { if (code === 'N') listAccount = val; return; }   // N inside an !Account block = its name
+    if (inCat) { if (code === 'N' && val) categories.add(val); return; }
+    if (!inTxns) {
+      if (!inAcct) return;   // memorized payees, securities, prices… also use N and T
+      // inside an !Account block: N = name, T = type
+      if (code === 'N') listAccount = val;
+      else if (code === 'T') listType = val;
+      else if (code === '^' && listAccount) accounts.set(listAccount, listType);
+      return;
+    }
     if (code === '^') {
       const iso = qifDate(rec.D || ''), amount = rec.T ?? rec.U;
       if (iso && amount !== undefined)
@@ -539,7 +553,8 @@ function readQuickenQif(text) {
       rec = {};
     } else if ('DTUPMNY'.includes(code) && !(code in rec)) rec[code] = val;
   });
-  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true };
+  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true,
+    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
 // Amount is either one column ({ amount }) or a deposit/payment pair ({ credit, debit }).
@@ -555,7 +570,9 @@ function readQuickenExport(text) {
   const amount = col(QK_COLS.amount), credit = col(QK_COLS.credit), debit = col(QK_COLS.debit);
   if (amount >= 0) map.amount = amount; else { map.credit = credit; map.debit = debit; }
   const order = detectDateOrder(body.map(r => r[map.date]));
-  return { header, body, map, order };
+  // Suggestions from a CSV report: the categories and accounts its rows use ([Transfer] entries aren't categories).
+  const distinct = i => i < 0 ? [] : [...new Set(body.map(r => r[i]).filter(v => v && !/^\[/.test(v) && !/total/i.test(v)))].sort((a, b) => a.localeCompare(b));
+  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })) };
 }
 // Transaction rows only: totals, blank lines and split lines without a date are dropped.
 function quickenRows(qx, map, order) {
@@ -630,7 +647,15 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
   const accounts = saved.accounts || {};
   const kinds = saved.kinds || {};
   let dateMode = saved.dateMode === 'effective' ? 'effective' : 'executed';
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds })); } catch (e) {} };
+  // Category and account names from the last Quicken export, offered as dropdown suggestions.
+  let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [];
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
+  function fillLists() {
+    $('catList').innerHTML = qkCats.map(c => `<option value="${esc(c)}">`).join('');
+    $('acctList').innerHTML = qkAccts.map(a => `<option value="${esc(a)}">`).join('');
+    $('catHint').textContent = qkCats.length ? `The ${qkCats.length} categories from your Quicken export are in each Category dropdown.`
+      : 'Add a Quicken QIF export (left) to pick categories from a list.';
+  }
 
   let items = [], files = [], nextFileId = 1;
 
@@ -677,7 +702,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     $('accounts').innerHTML = [...accts].map(([id, type]) => `<div class="acct${accounts[id].include ? '' : ' off'}">
         <div class="acct-head"><label class="check"><input type="checkbox" data-a="${esc(id)}" ${accounts[id].include ? 'checked' : ''}>${esc(type || 'Account')}</label>
           <span class="acct-id">${esc(id)}</span></div>
-        <input type="text" data-a="${esc(id)}" value="${esc(accounts[id].name)}" placeholder="Quicken account name" aria-label="Quicken account name for ${esc(id)}">
+        <input type="text" data-a="${esc(id)}" value="${esc(accounts[id].name)}" list="acctList" placeholder="Quicken account name" aria-label="Quicken account name for ${esc(id)}">
       </div>`).join('');
     $('acctSection').classList.toggle('hidden', accts.size === 0);
     $('dateTitle').textContent = (accts.size ? '3' : '2') + ' · Transaction date';
@@ -695,7 +720,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
       [...ks].map(([kind, { n, it }]) => `<tr><td title="${esc(it.kindDetail)}">${esc(it.kindLabel)}${it.kindDetail ? ` <span class="fmeta">${esc(it.kindDetail)}</span>` : ''}</td>
         <td class="num">${n}</td>
         <td><input type="text" data-k="${esc(kind)}" data-f="payee" value="${esc(kinds[kind]?.payee ?? it.defaultPayee)}"></td>
-        <td><input type="text" data-k="${esc(kind)}" data-f="category" value="${esc(kinds[kind]?.category ?? '')}" placeholder="e.g. Interest Inc"></td></tr>`).join('');
+        <td><input type="text" data-k="${esc(kind)}" data-f="category" list="catList" value="${esc(kinds[kind]?.category ?? '')}" placeholder="${qkCats.length ? 'Pick or type a category' : 'e.g. Interest Inc'}"></td></tr>`).join('');
     $('kindSection').classList.toggle('hidden', ks.size === 0);
     $('kindTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
       (kinds[inp.dataset.k] ||= {})[inp.dataset.f] = inp.value; save(); render();
@@ -714,6 +739,9 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     const qx = readQuickenExport(await file.text());
     if (!qx) { alert(`Couldn't find a Date column and an Amount (or Payment/Deposit) column in ${file.name}.`); return; }
     Object.assign(qk, { name: file.name, qx, map: { ...qx.map }, order: qx.order, keep: {} });
+    if (qx.categories.length) qkCats = qx.categories;
+    if (qx.accounts.length) qkAccts = qx.accounts.map(a => a.name);
+    save(); fillLists(); refresh();
     const accts = qkAccounts(), want = Object.values(accounts).filter(a => a.include).map(a => (a.name || '').trim()).find(n => accts.includes(n)) || '';
     qk.account = accts.includes(want) ? want : '';
     qkPanel(); render();
@@ -910,6 +938,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     if (!confirm('Forget the saved account names, payees and categories on this device?')) return;
     try { localStorage.removeItem(LS); } catch (e) {}
     [accounts, kinds].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+    qkCats = []; qkAccts = []; fillLists();
     refresh();
   });
 
@@ -924,6 +953,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
+  fillLists();
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
   ['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));

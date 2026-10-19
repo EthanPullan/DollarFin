@@ -194,3 +194,19 @@ test('combine returns the rows it dropped as repeats, naming the file they were 
   assert.equal(res.dropped.length, 5);   // the 6th sample row is a trade, skipped
   assert.ok(res.dropped.every(d => d.dupOf === 'jan.csv' && d.id.startsWith('2:')));
 });
+
+test('a QIF export also yields its category list and account names', () => {
+  const qx = Q.readQuickenExport(['!Type:Cat', 'NSalary', 'DPay', 'I', '^', 'NHousing:Rent', 'E', '^', 'NAuto', 'E', '^',
+    '!Option:AutoSwitch', '!Account', 'NChequing', 'TBank', '^', '!Account', 'NMy TFSA', 'TInvst', '^', '!Clear:AutoSwitch',
+    '!Account', 'NChequing', 'TBank', '^', '!Type:Bank', "D1/ 5'26", 'T10.00', 'LSalary', '^',
+    '!Type:Memorized', 'NNot a category', 'T1', '^'].join('\r\n'));
+  assert.deepEqual(plain(qx.categories), ['Auto', 'Housing:Rent', 'Salary']);
+  assert.deepEqual(plain(qx.accounts), [{ name: 'Chequing', type: 'Bank' }, { name: 'My TFSA', type: 'Invst' }]);
+});
+
+test('a CSV report yields the categories and accounts its rows use, without transfers or totals', () => {
+  const qx = Q.readQuickenExport(['Date,Account,Description,Category,Amount', '1/2/2026,Chq,A,Groceries,-5', '1/3/2026,Chq,B,[Savings],-9',
+    '1/4/2026,Savings,C,Salary,10', ',,,Grand Total,-4'].join('\n'));
+  assert.deepEqual(plain(qx.categories), ['Groceries', 'Salary']);
+  assert.deepEqual(plain(qx.accounts.map(a => a.name)), ['Chq', 'Savings']);
+});
