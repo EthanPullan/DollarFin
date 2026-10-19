@@ -80,8 +80,8 @@ test('toCSV writes Quicken\'s banking header verbatim and quotes fields that nee
   const csv = Q.toCSV(rows);
   assert.ok(!csv.includes('\r') && csv.endsWith('\n'), 'LF line endings, like Quicken\'s sample');
   const lines = csv.split('\n');
-  assert.equal(lines[0], 'date, payee, fipayee-unused,amount,debit,credit,category, account, tag, memo, chknum');
-  assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,,My Chequing,,Direct deposit received,');
+  assert.equal(lines[0], 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum');
+  assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,My Chequing,,Direct deposit received,');
 });
 
 /* ----- Already in Quicken ----- */

@@ -206,8 +206,8 @@
         </div>
         <label class="field-label" for="dateFmt" style="margin-top:12px">Date format in the file</label>
         <select id="dateFmt">
-          <option value="mdy">MM/DD/YYYY (Quicken's sample)</option>
-          <option value="ymd">YYYY-MM-DD</option>
+          <option value="ymd">YYYY-MM-DD (works in Quicken Canada)</option>
+          <option value="mdy">MM/DD/YYYY (Quicken's help page)</option>
           <option value="dmy">DD/MM/YYYY</option>
         </select>
         <p class="hint">If Quicken rejects the file, pick the format your Windows short date uses.</p>
@@ -297,10 +297,11 @@
 
 <script id="core">
 /* ===== core logic (DOM-free so it can be tested — see the .test.js beside this file) ===== */
-// Header copied verbatim from Quicken's current banking import template (separate debit and credit
-// columns; amount stays signed and debit/credit are left blank, as the template's examples do).
-const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit,credit,category, account, tag, memo, chknum';
-const FIELDS = ['date','payee','fipayee','amount','debit','credit','category','account','tag','memo','chknum'];
+// The 10 columns from Quicken's help page, in its order (one Debit/Credit column, left blank; the amount
+// is signed). Confirmed by a test import into Quicken Canada; the 11-column in-app sample (separate debit
+// and credit) shifts the fields and imports nothing.
+const HEADER_LINE = 'date, payee, fipayee-unused,amount,debit/credit,category, account, tag, memo, chknum';
+const FIELDS = ['date','payee','fipayee','amount','debitCredit','category','account','tag','memo','chknum'];
 
 function parseCSV(text) {
   const rows = []; let row = [], f = '', q = false;
@@ -447,8 +448,9 @@ function combine(files) {
   return { items, warnings, dropped };
 }
 
-// Quicken's banking sample uses MM/DD/YYYY, but Quicken Canada's CSV import is reported to follow the
-// Windows short-date setting instead — so the format is a choice.
+// Quicken's help page says MM/DD/YYYY, but Quicken Canada's CSV import follows the Windows short-date
+// setting: a test import rejected MM/DD/YYYY and accepted YYYY-MM-DD. So YYYY-MM-DD is the default and
+// the format stays a choice.
 const DATE_FORMATS = { mdy: 'MM/DD/YYYY', ymd: 'YYYY-MM-DD', dmy: 'DD/MM/YYYY' };
 function formatDate(iso, fmt = 'mdy') {
   const [y, m, d] = iso.split('-');
@@ -661,10 +663,11 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
   const accounts = saved.accounts || {};
   const kinds = saved.kinds || {};
   let dateMode = saved.dateMode === 'effective' ? 'effective' : 'executed';
-  let dateFmt = DATE_FORMATS[saved.dateFmt] ? saved.dateFmt : 'mdy';
+  // Saved as dateFormat: the earlier dateFmt setting defaulted to MM/DD/YYYY, which Quicken Canada rejects.
+  let dateFmt = DATE_FORMATS[saved.dateFormat] ? saved.dateFormat : 'ymd';
   // Category and account names from the last Quicken export, offered as dropdown suggestions.
   let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [];
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, dateFmt, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, dateFormat: dateFmt, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
   function fillLists() {
     $('catList').innerHTML = qkCats.map(c => `<option value="${esc(c)}">`).join('');
     $('acctList').innerHTML = qkAccts.map(a => `<option value="${esc(a)}">`).join('');
