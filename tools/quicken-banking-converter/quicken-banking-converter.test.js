@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId, cleanAcctNum, defaultAcctNum })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -132,4 +132,21 @@ test('FITIDs: unique, kept apart for identical rows, and unchanged by the date c
   const feb = exp('2026-02-02,10:00:00,,ACC1,Chequing,MoneyMovement,AFT_IN,Direct deposit received,,,,CAD,60,,,60');
   const both = ids(Q.buildOutput(Q.combine([{ id: 7, name: 'b.csv', objs: feb }, { id: 9, name: 'a.csv', objs: exp(...ROWS) }]).items, OPTS));
   assert.deepEqual(plain(a).filter(x => both.includes(x)), plain(a));
+});
+
+test('toQFX uses a typed account number (cleaned) instead of the generated one', () => {
+  const rows = Q.buildOutput(load().items, OPTS);
+  const qfx = Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', acctNum: ' 123-4567 89 ', balance: '1', now: NOW });
+  assert.deepEqual(plain(tag(qfx, 'ACCTID')), ['123456789']);
+  const fit = q => tag(q, 'FITID').join();
+  assert.equal(fit(qfx), fit(Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', balance: '1', now: NOW })));   // FITIDs unaffected
+});
+
+test('default account number is the Wealthsimple account ID; other ids fall back to a generated number', () => {
+  assert.equal(Q.defaultAcctNum('WK12ABC34CAD'), 'WK12ABC34CAD');
+  assert.equal(Q.defaultAcctNum('wk12abc34cad'), 'WK12ABC34CAD');
+  assert.equal(Q.defaultAcctNum('My TFSA'), Q.ofxAcctId('My TFSA'));
+  const qfx = Q.toQFX(Q.buildOutput(Q.combine([{ id: 1, name: 'a.csv', objs: exp(ROWS[0].replace('ACC1', 'WK12ABC34CAD')) }]).items,
+    { ...OPTS, accounts: { WK12ABC34CAD: { name: 'Chq', include: true } } }), { bid: '00002', accountId: 'WK12ABC34CAD', balance: '0', now: NOW });
+  assert.deepEqual(plain(tag(qfx, 'ACCTID')), ['WK12ABC34CAD']);
 });

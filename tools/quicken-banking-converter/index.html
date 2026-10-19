@@ -181,6 +181,11 @@
           <p class="hint">Wealthsimple isn't on Intuit's Web Connect list, so the QFX carries this bank's ID to get past Quicken's check. Keep the same one for this account — changing it can break the link.</p>
         </div>
         <div class="field">
+          <label class="field-label" for="acctNum">Account number</label>
+          <input id="acctNum" type="text" autocomplete="off">
+          <p class="hint">Your account number as Wealthsimple shows it — Quicken uses it to link the file to an account. Leave blank to use the Wealthsimple account ID shown. Keep it the same once you've imported.</p>
+        </div>
+        <div class="field">
           <label class="field-label" for="closeBal">Closing balance <span id="closeDate"></span></label>
           <input id="closeBal" type="text" inputmode="decimal" placeholder="e.g. 1234.56" autocomplete="off">
           <p class="hint">The account's balance in Wealthsimple at the end of the last day. Quicken shows it as the online balance.</p>
@@ -406,6 +411,10 @@ function hash128(str) {
 }
 // Quicken links a file to an account by ACCTID; derive a fixed 10-digit number from the Wealthsimple ID.
 const ofxAcctId = id => String(1e9 + parseInt(hash128(String(id)).slice(0, 8), 16) % 9e9);
+// An account number the user typed wins (letters and digits, max 22). Otherwise the Wealthsimple account
+// ID ("WK…CAD") is used as-is; anything else (e.g. an account name) becomes a generated 10-digit number.
+const cleanAcctNum = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 22);
+const defaultAcctNum = id => /^[A-Z0-9]{8,22}$/i.test(String(id)) ? String(id).toUpperCase() : ofxAcctId(id);
 // Repeats of the same source row get 0, 1, 2… in source order so each keeps its own FITID.
 function numberRepeats(items, keyOf) {
   const n = {};
@@ -424,12 +433,12 @@ const ofxSpan = rows => rows.reduce(([lo, hi], r) => [r._iso < lo ? r._iso : lo,
 const BANK_IDS = [['00002', 'TD Canada Trust'], ['00001', 'BMO'], ['00005', 'CIBC'], ['00015', 'RBC'],
   ['00025', 'Scotiabank'], ['00013', 'National Bank'], ['05060', 'Simplii'], ['10951', 'Tangerine (Windows only)']];
 
-// One account per file. opts: { bid, accountId (Wealthsimple ID), balance (closing), now: Date }
+// One account per file. opts: { bid, accountId (Wealthsimple ID), acctNum (optional real number), balance (closing), now: Date }
 function toQFX(rows, opts) {
   const [start, end] = ofxSpan(rows);
   const L = ofxHead(opts.bid, opts.now).concat(['<BANKMSGSRSV1>', '<STMTTRNRS>', '<TRNUID>1', '<STATUS>',
     '<CODE>0', '<SEVERITY>INFO', '</STATUS>', '<STMTRS>', '<CURDEF>CAD', '<BANKACCTFROM>', '<BANKID>000000000',
-    `<ACCTID>${ofxAcctId(opts.accountId)}`, '<ACCTTYPE>CHECKING', '</BANKACCTFROM>', '<BANKTRANLIST>',
+    `<ACCTID>${cleanAcctNum(opts.acctNum) || defaultAcctNum(opts.accountId)}`, '<ACCTTYPE>CHECKING', '</BANKACCTFROM>', '<BANKTRANLIST>',
     `<DTSTART>${ofxDate(start)}`, `<DTEND>${ofxDate(end)}`]);
   rows.forEach(r => {
     L.push('<STMTTRN>', `<TRNTYPE>${r._interest ? 'INT' : Number(r.amount) < 0 ? 'DEBIT' : 'CREDIT'}`,
@@ -460,7 +469,7 @@ function toQFX(rows, opts) {
   let bid = BANK_IDS.some(([id]) => id === saved.bid) ? saved.bid : BANK_IDS[0][0];
   const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, accounts, kinds, bid })); } catch (e) {} };
 
-  let items = [], files = [], nextFileId = 1;
+  let items = [], files = [], nextFileId = 1, shownAcct;
 
   async function addFiles(list) {
     const empty = [];
@@ -549,9 +558,19 @@ function toQFX(rows, opts) {
     const bal = $('closeBal').value.trim().replace(/[$,\s]/g, '');
     const balOk = /^-?\d+(\.\d+)?$/.test(bal);
     $('closeDate').textContent = rows.length ? 'on ' + rows[rows.length - 1].date : '';
-    $('dlQfx').disabled = !(rows.length && oneAccount && balOk);
+    // Account number for the one ticked account: what the user typed for it, else the generated one.
+    const acctId = oneAccount ? rows[0]._accountId : null;
+    if (acctId !== shownAcct) {
+      shownAcct = acctId;
+      $('acctNum').value = acctId ? accounts[acctId].acctNum || '' : '';
+      $('acctNum').placeholder = acctId ? defaultAcctNum(acctId) : '';
+      $('acctNum').disabled = !acctId;
+    }
+    const numOk = !$('acctNum').value.trim() || cleanAcctNum($('acctNum').value).length >= 4;
+    $('dlQfx').disabled = !(rows.length && oneAccount && balOk && numOk);
     $('dlQfx').title = !rows.length ? why : !oneAccount ? 'A QFX file holds one account — tick just one'
-      : !balOk ? 'Enter the closing balance (left panel) to download QFX' : '';
+      : !balOk ? 'Enter the closing balance (left panel) to download QFX'
+      : !numOk ? 'The account number needs at least 4 letters or digits' : '';
   }
 
   $('dateMode').querySelectorAll('button').forEach(b => {
@@ -567,6 +586,7 @@ function toQFX(rows, opts) {
     if (!confirm('Forget the saved account names, payees and categories on this device?')) return;
     try { localStorage.removeItem(LS); } catch (e) {}
     [accounts, kinds].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+    shownAcct = undefined;
     refresh();
   });
 
@@ -582,7 +602,7 @@ function toQFX(rows, opts) {
   $('dl').addEventListener('click', () => download(toCSV(current()), 'text/csv', '.csv'));
   $('dlQfx').addEventListener('click', () => {
     const rows = current();
-    const qfx = toQFX(rows, { bid, accountId: rows[0]._accountId, now: new Date(),
+    const qfx = toQFX(rows, { bid, accountId: rows[0]._accountId, acctNum: $('acctNum').value, now: new Date(),
       balance: $('closeBal').value.trim().replace(/[$,\s]/g, '') });
     download(encode1252(qfx), 'application/vnd.intu.qfx', '.qfx');
   });
@@ -590,6 +610,10 @@ function toQFX(rows, opts) {
   $('bid').value = bid;
   $('bid').addEventListener('change', () => { bid = $('bid').value; save(); });
   $('closeBal').addEventListener('input', render);
+  $('acctNum').addEventListener('input', () => {
+    if (shownAcct) { accounts[shownAcct].acctNum = $('acctNum').value.trim(); save(); }
+    render();
+  });
 
   $('file').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
   ['dragenter','dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));

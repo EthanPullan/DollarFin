@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER, parseCSV, toObjects, csvField, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId, cleanAcctNum, defaultAcctNum })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -255,4 +255,10 @@ test('closing cash ignores a trailing stock-lending row (its balance is a share 
     '"2026-05-01","CONT","Contribution (executed at 2026-05-01)","30.0","30.0","CAD"',
     '"2026-05-11","LOAN","XYZ - Example ETF: 2.0000 Shares on loan (executed at 2026-05-11)","0.0","0.0","XYZ"');
   assert.equal(Q.combine([{ id: 1, name: 'x.csv', objs }]).cash, 30);
+});
+
+test('investment toQFX uses a typed account number instead of the generated one', () => {
+  const res = Q.combine([{ id: 1, name: 'x.csv', objs: Q.toObjects(Q.parseCSV(STATEMENT)) }]);
+  const qfx = Q.toQFX(Q.buildOutput(res.items, OPTS), { bid: '03349', accountId: 'X', acctNum: 'AB 1234', cash: 0, now: NOW });
+  assert.deepEqual(plain(tag(qfx, 'ACCTID')), ['AB1234']);
 });

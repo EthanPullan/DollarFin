@@ -181,6 +181,11 @@
           <select id="bid"></select>
           <p class="hint">Wealthsimple isn't on Intuit's Web Connect list, so the QFX carries this broker's ID to get past Quicken's check. Keep the same one for this account — changing it can break the link.</p>
         </div>
+        <div class="field">
+          <label class="field-label" for="acctNum">Account number</label>
+          <input id="acctNum" type="text" autocomplete="off">
+          <p class="hint">Your account number as Wealthsimple shows it — Quicken uses it to link the file to an account. Leave blank to use the Wealthsimple account ID shown. Keep it the same once you've imported.</p>
+        </div>
         <p class="hint">Back up first, then File › File Import › Web Connect (.QFX) File and link it to your existing account. Re-importing overlapping months is safe — Quicken skips transactions it has seen. The cash balance comes from the statement; transfer accounts only go in the CSV.</p>
       </section>
 
@@ -419,6 +424,10 @@ function hash128(str) {
 }
 // Quicken links a file to an account by ACCTID; derive a fixed 10-digit number from the Wealthsimple ID.
 const ofxAcctId = id => String(1e9 + parseInt(hash128(String(id)).slice(0, 8), 16) % 9e9);
+// An account number the user typed wins (letters and digits, max 22). Otherwise the Wealthsimple account
+// ID ("WK…CAD") is used as-is; anything else (e.g. an account name) becomes a generated 10-digit number.
+const cleanAcctNum = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 22);
+const defaultAcctNum = id => /^[A-Z0-9]{8,22}$/i.test(String(id)) ? String(id).toUpperCase() : ofxAcctId(id);
 // Repeats of the same source row get 0, 1, 2… in source order so each keeps its own FITID.
 function numberRepeats(items, keyOf) {
   const n = {};
@@ -439,7 +448,7 @@ const BROKER_IDS = [['03349', 'TD Direct Investing (TD Waterhouse)'], ['04705', 
 const CASH_TRNTYPE = { XIn: 'CREDIT', XOut: 'DEBIT', IntInc: 'INT', MiscExp: 'FEE' };
 const CASH_NAME = { XIn: 'Deposit', XOut: 'Withdrawal', IntInc: 'Interest', MiscExp: 'Fee' };
 
-// opts: { bid, accountId (Wealthsimple ID or account name), cash (closing cash balance), now: Date }
+// opts: { bid, accountId (Wealthsimple ID or account name), acctNum (optional real number), cash (closing cash balance), now: Date }
 // No INVPOSLIST: positions that disagree with the transactions make Quicken add placeholder entries.
 // Securities are keyed by the original Wealthsimple symbol (TICKER), which never changes; the names
 // and symbols set in the Securities table are what Quicken shows.
@@ -450,7 +459,7 @@ function toQFX(rows, opts) {
   const secid = sym => ['<SECID>', `<UNIQUEID>${sgml(sym, 32)}`, '<UNIQUEIDTYPE>TICKER', '</SECID>'];
   const L = ofxHead(opts.bid, opts.now).concat(['<INVSTMTMSGSRSV1>', '<INVSTMTTRNRS>', '<TRNUID>1', '<STATUS>',
     '<CODE>0', '<SEVERITY>INFO', '</STATUS>', '<INVSTMTRS>', `<DTASOF>${ofxDate(end)}`, '<CURDEF>CAD',
-    '<INVACCTFROM>', '<BROKERID>wealthsimple.com', `<ACCTID>${ofxAcctId(opts.accountId)}`, '</INVACCTFROM>',
+    '<INVACCTFROM>', '<BROKERID>wealthsimple.com', `<ACCTID>${cleanAcctNum(opts.acctNum) || defaultAcctNum(opts.accountId)}`, '</INVACCTFROM>',
     '<INVTRANLIST>', `<DTSTART>${ofxDate(start)}`, `<DTEND>${ofxDate(end)}`]);
   rows.forEach(r => {
     const total = Math.abs(Number(r.amount)).toFixed(2);
@@ -515,11 +524,12 @@ function toQFX(rows, opts) {
     if (key === shownKey) return;
     shownKey = key;
     const a = saved.accounts[key];
-    if (a) { $('account').value = a.account || ''; $('xfer').value = a.xfer || ''; filledFrom = a.from || key; }
-    else if (filledFrom && filledFrom !== '_last') { $('account').value = ''; $('xfer').value = ''; filledFrom = null; }
+    if (a) { $('account').value = a.account || ''; $('xfer').value = a.xfer || ''; $('acctNum').value = a.acctNum || ''; filledFrom = a.from || key; }
+    else if (filledFrom && filledFrom !== '_last') { $('account').value = ''; $('xfer').value = ''; $('acctNum').value = ''; filledFrom = null; }
   }
+  const qfxAccountId = () => acctKey() !== '_last' ? acctKey() : $('account').value.trim();
   function save() {
-    const key = acctKey(), a = { account: $('account').value, xfer: $('xfer').value };
+    const key = acctKey(), a = { account: $('account').value, xfer: $('xfer').value, acctNum: $('acctNum').value.trim() };
     saved.accounts[key] = a; saved.accounts._last = { ...a, from: key };
     filledFrom = key;
     saved.secs = secOverrides; saved.dateMode = dateMode; saved.bid = bid;
@@ -598,10 +608,15 @@ function toQFX(rows, opts) {
       : !account ? 'Fill in the account name'
       : missing ? `${missing} transfer row(s) still need a transfer account` : 'Ready to download';
     $('dl').title = ok ? '' : why;
-    // QFX needs a fixed account number: from the Wealthsimple ID in the filename, else the account name.
-    const qfxOk = rows.length && (acctKey() !== '_last' || account);
+    // QFX needs a fixed account number: the one typed, else generated from the Wealthsimple ID in the
+    // filename, else from the account name.
+    const typed = $('acctNum').value.trim(), qfxId = qfxAccountId();
+    $('acctNum').placeholder = qfxId ? defaultAcctNum(qfxId) : 'e.g. 12345678';
+    const numOk = !typed || cleanAcctNum(typed).length >= 4;
+    const qfxOk = rows.length && (typed || qfxId) && numOk;
     $('dlQfx').disabled = !qfxOk;
-    $('dlQfx').title = qfxOk ? '' : !rows.length ? why : 'Fill in the account name';
+    $('dlQfx').title = qfxOk ? '' : !rows.length ? why
+      : !numOk ? 'The account number needs at least 4 letters or digits' : 'Fill in the account name or account number';
     $('stReady').textContent = why;
     $('stTx').textContent = rows.length;
     $('stMissing').textContent = missing;
@@ -632,7 +647,7 @@ function toQFX(rows, opts) {
     updateStatus();
   }
 
-  ['account','xfer'].forEach(id => $(id).addEventListener('input', () => { save(); render(); }));
+  ['account','xfer','acctNum'].forEach(id => $(id).addEventListener('input', () => { save(); render(); }));
   $('dateMode').querySelectorAll('button').forEach(b => {
     b.classList.toggle('active', b.dataset.v === dateMode);
     b.addEventListener('click', () => {
@@ -647,7 +662,7 @@ function toQFX(rows, opts) {
     try { localStorage.removeItem(LS); } catch (e) {}
     saved = { accounts: {} };
     Object.keys(secOverrides).forEach(k => delete secOverrides[k]);
-    $('account').value = ''; $('xfer').value = ''; shownKey = filledFrom = null;
+    $('account').value = ''; $('xfer').value = ''; $('acctNum').value = ''; shownKey = filledFrom = null;
     refresh();
   });
   applySavedAccount();
@@ -663,8 +678,7 @@ function toQFX(rows, opts) {
   }
   $('dl').addEventListener('click', () => download(toCSV(current()), 'text/csv', '.csv'));
   $('dlQfx').addEventListener('click', () => {
-    const key = acctKey();
-    const qfx = toQFX(current(), { bid, cash, now: new Date(), accountId: key !== '_last' ? key : $('account').value.trim() });
+    const qfx = toQFX(current(), { bid, cash, now: new Date(), accountId: qfxAccountId(), acctNum: $('acctNum').value });
     download(encode1252(qfx), 'application/vnd.intu.qfx', '.qfx');
   });
   $('bid').innerHTML = BROKER_IDS.map(([id, name]) => `<option value="${id}">${esc(name)} (${id})</option>`).join('');
