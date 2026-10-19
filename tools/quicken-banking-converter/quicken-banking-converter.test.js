@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, toQFX, encode1252, hash128, ofxAcctId, cleanAcctNum, defaultAcctNum })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -82,71 +82,68 @@ test('toCSV writes Quicken\'s banking header verbatim and quotes fields that nee
   assert.equal(lines[1], '01/05/2026,"Pay, Inc.",,50.00,,,My Chequing,,Direct deposit received,');
 });
 
-// Every aggregate (<TAG> on its own line) must be closed in order; leaf elements carry a value.
-function assertBalanced(qfx) {
-  const [head, body] = qfx.split('\r\n\r\n');
-  assert.equal(head, 'OFXHEADER:100\r\nDATA:OFXSGML\r\nVERSION:102\r\nSECURITY:NONE\r\nENCODING:USASCII\r\nCHARSET:1252\r\nCOMPRESSION:NONE\r\nOLDFILEUID:NONE\r\nNEWFILEUID:NONE');
-  assert.ok(body.startsWith('<OFX>\r\n') && body.endsWith('</OFX>\r\n') && !/[^\r]\n/.test(qfx), 'CRLF, <OFX> root');
-  const stack = [];
-  for (const line of body.split('\r\n').filter(Boolean)) {
-    const open = /^<([A-Z0-9.]+)>$/.exec(line), close = /^<\/([A-Z0-9.]+)>$/.exec(line);
-    if (open) stack.push(open[1]);
-    else if (close) assert.equal(stack.pop(), close[1], 'closing tag order');
-    else assert.match(line, /^<[A-Z0-9.]+>\S/, 'leaf element has a value: ' + line);
-  }
-  assert.equal(stack.length, 0);
-}
-const NOW = new Date(2026, 9, 19, 9, 30, 0);
-const tag = (qfx, t) => [...qfx.matchAll(new RegExp(`<${t.replace('.', '\\.')}>([^\\r]*)`, 'g'))].map(m => m[1]);
+/* ----- Already in Quicken ----- */
 
-test('hash128 and ofxAcctId are frozen (changing them would re-import every past transaction)', () => {
-  assert.equal(Q.hash128(''), '811c9dc5050c5d1f9e3779b985ebca6b');
-  assert.equal(Q.hash128('WS|row|0'), 'a4e075f3467db61144fbffaf4de584d5');
-  assert.equal(Q.ofxAcctId('ACC1'), '2795294097');
-  assert.match(Q.ofxAcctId('anything'), /^[1-9]\d{9}$/);
+test('parseMoney reads Quicken amount styles', () => {
+  assert.deepEqual([' $1,234.56 ', '-1,000.00', '(25.00)', '12.50-', '$-3', '', 'Total'].map(Q.parseMoney).map(v => Number.isNaN(v) ? 'NaN' : v),
+    [1234.56, -1000, -25, -12.5, -3, 'NaN', 'NaN']);
 });
 
-test('toQFX: a balanced bank statement with signed amounts, INT for interest, and the closing balance', () => {
-  const rows = Q.buildOutput(load().items, { ...OPTS, kinds: { 'MoneyMovement|AFT_IN|in': { payee: 'Pay & Co <Ltd> with a very long payee name' } } });
-  const qfx = Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', balance: '123.4', now: NOW });
-  assertBalanced(qfx);
-  assert.deepEqual(plain(tag(qfx, 'FID')), ['00002']);
-  assert.deepEqual(plain(tag(qfx, 'INTU.BID')), ['00002']);
-  assert.match(tag(qfx, 'DTSERVER')[0], /^20261019093000\.000\[-?\d+(\.\d\d)?\]$/);
-  assert.deepEqual(plain(tag(qfx, 'ACCTID')), [Q.ofxAcctId('ACC1')]);
-  assert.deepEqual(plain(tag(qfx, 'TRNTYPE')), ['CREDIT', 'CREDIT', 'DEBIT', 'INT']);
-  assert.deepEqual(plain(tag(qfx, 'TRNAMT')), ['50.00', '50.00', '-25.00', '0.03']);
-  assert.deepEqual(plain(tag(qfx, 'DTPOSTED')), ['20260105120000', '20260105120000', '20260110120000', '20260201120000']);
-  assert.equal(tag(qfx, 'NAME')[0], 'Pay &amp; Co &lt;Ltd&gt; with a very long');   // cut to 32, then escaped
-  assert.deepEqual(plain(tag(qfx, 'DTSTART').concat(tag(qfx, 'DTEND'), tag(qfx, 'BALAMT'), tag(qfx, 'DTASOF'))),
-    ['20260105120000', '20260201120000', '123.40', '20260201120000']);
+test('date order is detected from the values, and dates become ISO', () => {
+  assert.equal(Q.detectDateOrder(['1/5/2026', '1/27/2026']), 'mdy');
+  assert.equal(Q.detectDateOrder(['27/01/2026', '05/01/2026']), 'dmy');
+  assert.equal(Q.detectDateOrder(['2026-01-27']), 'ymd');
+  assert.equal(Q.detectDateOrder(['1/5/2026', '2/6/2026']), null);
+  assert.equal(Q.toIsoDate('1/5/26', 'mdy'), '2026-01-05');
+  assert.equal(Q.toIsoDate('27/01/2026', 'dmy'), '2026-01-27');
+  assert.equal(Q.toIsoDate('Total', 'mdy'), null);
 });
 
-test('FITIDs: unique, kept apart for identical rows, and unchanged by the date choice or extra files', () => {
-  const ids = rows => rows.map(r => r._fitid);
-  const a = ids(Q.buildOutput(load().items, OPTS));
-  assert.equal(new Set(a).size, a.length);
-  assert.match(a[0], /^[0-9a-f]{32}$/);
-  const eff = Q.buildOutput(load().items, { ...OPTS, dateMode: 'effective' });
-  assert.deepEqual(plain(ids(eff)).sort(), plain(a).sort());
-  const feb = exp('2026-02-02,10:00:00,,ACC1,Chequing,MoneyMovement,AFT_IN,Direct deposit received,,,,CAD,60,,,60');
-  const both = ids(Q.buildOutput(Q.combine([{ id: 7, name: 'b.csv', objs: feb }, { id: 9, name: 'a.csv', objs: exp(...ROWS) }]).items, OPTS));
-  assert.deepEqual(plain(a).filter(x => both.includes(x)), plain(a));
+test('a CSV report: title lines and totals skipped, Payment/Deposit pair or Amount column', () => {
+  const report = [
+    '"Transaction Report"', '"1/1/2026 through 2/28/2026"', '',
+    '"","Date","Account","Num","Description","Memo","Category","Clr","Amount"',
+    '"","1/27/2026","Chequing","","Pay Co","","Salary","R","1,200.00"',
+    '"","1/28/2026","Chequing","","Rent","","Housing","","(950.00)"',
+    '"","1/28/2026","Savings","","Move","","[Chequing]","","-50.00"',
+    '"","","","","","","","Total","200.00"'].join('\r\n');
+  const qx = Q.readQuickenExport(report);
+  assert.deepEqual(plain(qx.map), { date: 1, payee: 4, account: 2, amount: 8 });
+  assert.deepEqual(plain(Q.quickenRows(qx, qx.map, qx.order)), [
+    { iso: '2026-01-27', amount: 1200, payee: 'Pay Co', account: 'Chequing' },
+    { iso: '2026-01-28', amount: -950, payee: 'Rent', account: 'Chequing' },
+    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Savings' }]);
+  const pair = Q.readQuickenExport('Date,Payee,Payment,Deposit\n05/02/2026,A,10.00,\n06/02/2026,B,,4.50\n13/02/2026,C,1.00,');
+  assert.equal(pair.order, 'dmy');
+  assert.deepEqual(plain(Q.quickenRows(pair, pair.map, pair.order).map(r => [r.iso, r.amount])),
+    [['2026-02-05', -10], ['2026-02-06', 4.5], ['2026-02-13', -1]]);
 });
 
-test('toQFX uses a typed account number (cleaned) instead of the generated one', () => {
-  const rows = Q.buildOutput(load().items, OPTS);
-  const qfx = Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', acctNum: ' 123-4567 89 ', balance: '1', now: NOW });
-  assert.deepEqual(plain(tag(qfx, 'ACCTID')), ['123456789']);
-  const fit = q => tag(q, 'FITID').join();
-  assert.equal(fit(qfx), fit(Q.toQFX(rows, { bid: '00002', accountId: 'ACC1', balance: '1', now: NOW })));   // FITIDs unaffected
+test('a QIF export: only transaction sections, tagged by account; memorized payees, prices and lists ignored', () => {
+  const qif = ['!Type:Cat', 'NSalary', 'I', '^',
+    '!Option:AutoSwitch', '!Account', 'NChequing', 'TBank', '^', '!Account', 'NTFSA', 'TInvst', '^', '!Clear:AutoSwitch',
+    '!Account', 'NChequing', 'TBank', '^', '!Type:Bank ',
+    "D1/ 5'26", 'U1,200.00', 'T1,200.00', 'PPay Co', 'LSalary', '^',
+    "D1/28'26", 'T-50.00', 'MMove', 'L[TFSA]', 'S[TFSA]', '$-50.00', '^',
+    '!Account', 'NTFSA', 'TInvst', '^', '!Type:Invst',
+    'D01/29/2026', 'NBuy', 'YExample ETF', 'I10', 'Q2', 'T20.00', '^',
+    '!Type:Memorized', 'PPay Co', 'T1,200.00', '^',
+    '!Type:Prices', '"XYZ",10.5,"1/30\'26"', '^'].join('\r\n');
+  const qx = Q.readQuickenExport(qif);
+  assert.ok(qx.qif);
+  assert.deepEqual(plain(Q.quickenRows(qx, qx.map, qx.order)), [
+    { iso: '2026-01-05', amount: 1200, payee: 'Pay Co', account: 'Chequing' },
+    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Chequing' },
+    { iso: '2026-01-29', amount: 20, payee: 'Buy Example ETF', account: 'TFSA' }]);
 });
 
-test('default account number is the Wealthsimple account ID; other ids fall back to a generated number', () => {
-  assert.equal(Q.defaultAcctNum('WK12ABC34CAD'), 'WK12ABC34CAD');
-  assert.equal(Q.defaultAcctNum('wk12abc34cad'), 'WK12ABC34CAD');
-  assert.equal(Q.defaultAcctNum('My TFSA'), Q.ofxAcctId('My TFSA'));
-  const qfx = Q.toQFX(Q.buildOutput(Q.combine([{ id: 1, name: 'a.csv', objs: exp(ROWS[0].replace('ACC1', 'WK12ABC34CAD')) }]).items,
-    { ...OPTS, accounts: { WK12ABC34CAD: { name: 'Chq', include: true } } }), { bid: '00002', accountId: 'WK12ABC34CAD', balance: '0', now: NOW });
-  assert.deepEqual(plain(tag(qfx, 'ACCTID')), ['WK12ABC34CAD']);
+test('matchExisting: same amount within the window, one Quicken row per download row, closest date first', () => {
+  const ours = [
+    { id: 'a', iso: '2026-06-25', amount: 200 }, { id: 'b', iso: '2026-06-25', amount: 200 },
+    { id: 'c', iso: '2026-06-28', amount: -100 }, { id: 'd', iso: '2026-07-10', amount: -100 }, { id: 'e', iso: '2026-07-01', amount: 0.17 }];
+  const theirs = [{ iso: '2026-06-25', amount: 200 }, { iso: '2026-06-26', amount: -100 }, { iso: '2026-07-01', amount: -0.17 }];
+  const m = Q.matchExisting(ours, theirs, { days: 3 });
+  assert.deepEqual([...m.keys()].sort(), ['a', 'c']);     // one $200 in Quicken → only one of the two deposits
+  assert.equal(Q.matchExisting(ours, theirs, { days: 1 }).has('c'), false);   // 2 days apart
+  assert.equal(Q.matchExisting(ours, theirs, { days: 3, absolute: true }).has('e'), true);
 });
