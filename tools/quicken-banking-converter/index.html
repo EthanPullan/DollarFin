@@ -565,11 +565,11 @@ function readQuickenQif(text) {
     if (code === '^') {
       const iso = qifDate(rec.D || ''), amount = rec.T ?? rec.U;
       if (iso && amount !== undefined)
-        body.push([iso, account, rec.P || [rec.N, rec.Y].filter(Boolean).join(' ') || rec.M || '', amount]);
+        body.push([iso, account, rec.P || [rec.N, rec.Y].filter(Boolean).join(' ') || rec.M || '', amount, rec.L || '']);
       rec = {};
-    } else if ('DTUPMNY'.includes(code) && !(code in rec)) rec[code] = val;
+    } else if ('DTUPMNYL'.includes(code) && !(code in rec)) rec[code] = val;   // L: category, or [Account] for a transfer
   });
-  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true,
+  return { header: ['Date', 'Account', 'Payee', 'Amount', 'Category'], body, map: { date: 0, account: 1, payee: 2, amount: 3, category: 4 }, order: 'ymd', qif: true,
     categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
@@ -582,7 +582,7 @@ function readQuickenExport(text) {
   if (hi < 0) return null;
   const header = rows[hi], body = rows.slice(hi + 1);
   const col = rx => header.findIndex(c => rx.test(c));
-  const map = { date: col(QK_COLS.date), payee: col(QK_COLS.payee), account: col(QK_COLS.account) };
+  const map = { date: col(QK_COLS.date), payee: col(QK_COLS.payee), account: col(QK_COLS.account), category: col(QK_COLS.category) };
   const amount = col(QK_COLS.amount), credit = col(QK_COLS.credit), debit = col(QK_COLS.debit);
   if (amount >= 0) map.amount = amount; else { map.credit = credit; map.debit = debit; }
   const order = detectDateOrder(body.map(r => r[map.date]));
@@ -604,7 +604,10 @@ function quickenRows(qx, map, order) {
       amount = (Number.isNaN(c) ? 0 : Math.abs(c)) - (Number.isNaN(d) ? 0 : Math.abs(d));
     }
     if (!Number.isFinite(amount)) return;
-    out.push({ iso, amount, payee: map.payee >= 0 ? r[map.payee] || '' : '', account: map.account >= 0 ? r[map.account] || '' : '' });
+    const account = map.account >= 0 ? r[map.account] || '' : '';
+    // "[Other account]" (optionally "/class") in the category marks a transfer; a self-reference isn't one.
+    const tr = ((/^\[([^\]]+)\]/.exec(map.category >= 0 ? r[map.category] || '' : '') || [])[1] || '').split('/')[0].trim();
+    out.push({ iso, amount, payee: map.payee >= 0 ? r[map.payee] || '' : '', account, transfer: tr === account ? '' : tr });
   });
   return out;
 }

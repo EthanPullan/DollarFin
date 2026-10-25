@@ -110,11 +110,11 @@ test('a CSV report: title lines and totals skipped, Payment/Deposit pair or Amou
     '"","1/28/2026","Savings","","Move","","[Chequing]","","-50.00"',
     '"","","","","","","","Total","200.00"'].join('\r\n');
   const qx = Q.readQuickenExport(report);
-  assert.deepEqual(plain(qx.map), { date: 1, payee: 4, account: 2, amount: 8 });
+  assert.deepEqual(plain(qx.map), { date: 1, payee: 4, account: 2, category: 6, amount: 8 });
   assert.deepEqual(plain(Q.quickenRows(qx, qx.map, qx.order)), [
-    { iso: '2026-01-27', amount: 1200, payee: 'Pay Co', account: 'Chequing' },
-    { iso: '2026-01-28', amount: -950, payee: 'Rent', account: 'Chequing' },
-    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Savings' }]);
+    { iso: '2026-01-27', amount: 1200, payee: 'Pay Co', account: 'Chequing', transfer: '' },
+    { iso: '2026-01-28', amount: -950, payee: 'Rent', account: 'Chequing', transfer: '' },
+    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Savings', transfer: 'Chequing' }]);
   const pair = Q.readQuickenExport('Date,Payee,Payment,Deposit\n05/02/2026,A,10.00,\n06/02/2026,B,,4.50\n13/02/2026,C,1.00,');
   assert.equal(pair.order, 'dmy');
   assert.deepEqual(plain(Q.quickenRows(pair, pair.map, pair.order).map(r => [r.iso, r.amount])),
@@ -134,9 +134,9 @@ test('a QIF export: only transaction sections, tagged by account; memorized paye
   const qx = Q.readQuickenExport(qif);
   assert.ok(qx.qif);
   assert.deepEqual(plain(Q.quickenRows(qx, qx.map, qx.order)), [
-    { iso: '2026-01-05', amount: 1200, payee: 'Pay Co', account: 'Chequing' },
-    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Chequing' },
-    { iso: '2026-01-29', amount: 20, payee: 'Buy Example ETF', account: 'TFSA' }]);
+    { iso: '2026-01-05', amount: 1200, payee: 'Pay Co', account: 'Chequing', transfer: '' },
+    { iso: '2026-01-28', amount: -50, payee: 'Move', account: 'Chequing', transfer: 'TFSA' },
+    { iso: '2026-01-29', amount: 20, payee: 'Buy Example ETF', account: 'TFSA', transfer: '' }]);
 });
 
 test('matchExisting: same amount within the window, one Quicken row per download row, closest date first', () => {

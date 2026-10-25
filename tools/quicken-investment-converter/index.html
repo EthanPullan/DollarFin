@@ -229,6 +229,7 @@
               <option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></label>
             <label id="qkAccountWrap" class="qk-wide">Quicken account<select id="qkAccount"></select></label>
           </div>
+          <p class="hint">The Quicken account is picked by matching its transactions to your statement; its name becomes the investment account, and its past transfers fill in the transfer accounts (names that are already real Quicken accounts are kept).</p>
           <p class="hint">Rows with the same amount as a transaction in the export, within these days, are left out of the download — they're marked in amber in the preview, with a tick box to keep any of them.</p>
         </div>
       </section>
@@ -516,11 +517,11 @@ function readQuickenQif(text) {
     if (code === '^') {
       const iso = qifDate(rec.D || ''), amount = rec.T ?? rec.U;
       if (iso && amount !== undefined)
-        body.push([iso, account, rec.P || [rec.N, rec.Y].filter(Boolean).join(' ') || rec.M || '', amount]);
+        body.push([iso, account, rec.P || [rec.N, rec.Y].filter(Boolean).join(' ') || rec.M || '', amount, rec.L || '']);
       rec = {};
-    } else if ('DTUPMNY'.includes(code) && !(code in rec)) rec[code] = val;
+    } else if ('DTUPMNYL'.includes(code) && !(code in rec)) rec[code] = val;   // L: category, or [Account] for a transfer
   });
-  return { header: ['Date', 'Account', 'Payee', 'Amount'], body, map: { date: 0, account: 1, payee: 2, amount: 3 }, order: 'ymd', qif: true,
+  return { header: ['Date', 'Account', 'Payee', 'Amount', 'Category'], body, map: { date: 0, account: 1, payee: 2, amount: 3, category: 4 }, order: 'ymd', qif: true,
     categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
@@ -533,7 +534,7 @@ function readQuickenExport(text) {
   if (hi < 0) return null;
   const header = rows[hi], body = rows.slice(hi + 1);
   const col = rx => header.findIndex(c => rx.test(c));
-  const map = { date: col(QK_COLS.date), payee: col(QK_COLS.payee), account: col(QK_COLS.account) };
+  const map = { date: col(QK_COLS.date), payee: col(QK_COLS.payee), account: col(QK_COLS.account), category: col(QK_COLS.category) };
   const amount = col(QK_COLS.amount), credit = col(QK_COLS.credit), debit = col(QK_COLS.debit);
   if (amount >= 0) map.amount = amount; else { map.credit = credit; map.debit = debit; }
   const order = detectDateOrder(body.map(r => r[map.date]));
@@ -555,7 +556,10 @@ function quickenRows(qx, map, order) {
       amount = (Number.isNaN(c) ? 0 : Math.abs(c)) - (Number.isNaN(d) ? 0 : Math.abs(d));
     }
     if (!Number.isFinite(amount)) return;
-    out.push({ iso, amount, payee: map.payee >= 0 ? r[map.payee] || '' : '', account: map.account >= 0 ? r[map.account] || '' : '' });
+    const account = map.account >= 0 ? r[map.account] || '' : '';
+    // "[Other account]" (optionally "/class") in the category marks a transfer; a self-reference isn't one.
+    const tr = ((/^\[([^\]]+)\]/.exec(map.category >= 0 ? r[map.category] || '' : '') || [])[1] || '').split('/')[0].trim();
+    out.push({ iso, amount, payee: map.payee >= 0 ? r[map.payee] || '' : '', account, transfer: tr === account ? '' : tr });
   });
   return out;
 }
@@ -712,8 +716,42 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     Object.assign(qk, { name: file.name, qx, map: { ...qx.map }, order: qx.order, keep: {} });
     if (qx.accounts.length) { saved.qkAccts = qx.accounts.map(a => a.name); save(); fillLists(); }
     const accts = qkAccounts(), want = $('account').value.trim();
-    qk.account = accts.includes(want) ? want : '';
+    qk.account = accts.includes(want) ? want : guessQkAccount();
+    useQkAccount();
     qkPanel(); render();
+  }
+  // The Quicken account whose transactions match this statement best (same amount, nearby date).
+  function guessQkAccount() {
+    const ours = allRows().map(r => ({ id: r._id, iso: r.date, amount: Number(r.amount) })), byAcct = {};
+    quickenRows(qk.qx, qk.map, qk.order).forEach(t => { if (t.account) (byAcct[t.account] ||= []).push(t); });
+    let best = '', most = 0;
+    Object.entries(byAcct).forEach(([a, rows]) => {
+      const n = matchExisting(ours, rows, { days: qk.days, absolute: true }).size;
+      if (n > most) { most = n; best = a; }
+    });
+    return best;
+  }
+  // With a Quicken account chosen: use its name as the investment account, and take the transfer accounts
+  // from its history — the most common one as the default, and for each transfer row, the account an
+  // earlier transfer of the same amount used. Names that are real Quicken accounts are never replaced.
+  function useQkAccount() {
+    if (!qk.qx || !qk.account) return;
+    const known = new Set([...qkAccounts(), ...(saved.qkAccts || [])]);
+    const keep = v => v.trim() && known.has(v.trim());
+    if (!keep($('account').value)) $('account').value = qk.account;
+    const hist = quickenRows(qk.qx, qk.map, qk.order).filter(t => t.account === qk.account && t.transfer);
+    if (hist.length) {
+      const freq = {};
+      hist.forEach(t => { freq[t.transfer] = (freq[t.transfer] || 0) + 1; });
+      if (!keep($('xfer').value)) $('xfer').value = Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+      allRows().filter(isXfer).forEach(r => {
+        if (keep(xferByRow[r._id] || '')) return;
+        const same = hist.filter(t => Math.abs(Math.abs(t.amount) - Math.abs(Number(r.amount))) < 0.005)
+          .sort((a, b) => a.iso < b.iso ? 1 : -1)[0];
+        if (same && same.transfer !== $('xfer').value.trim()) xferByRow[r._id] = same.transfer;
+      });
+    }
+    save();
   }
   const qkAccounts = () => qk.qx && qk.map.account >= 0
     ? [...new Set(quickenRows(qk.qx, qk.map, qk.order).map(r => r.account).filter(Boolean))].sort() : [];
@@ -871,7 +909,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     render();
   });
   $('qkOrder').addEventListener('change', () => { qk.order = $('qkOrder').value || qk.qx.order; render(); });
-  $('qkAccount').addEventListener('change', () => { qk.account = $('qkAccount').value; render(); });
+  $('qkAccount').addEventListener('change', () => { qk.account = $('qkAccount').value; useQkAccount(); render(); });
   $('qkDays').addEventListener('change', () => { qk.days = +$('qkDays').value; render(); });
 
   const isXfer = r => r.action === 'XIn' || r.action === 'XOut';
