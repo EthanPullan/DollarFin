@@ -358,6 +358,8 @@ function convert(objs) {
       items.push({ ...base, action: 'XOut', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') || 'Tax-free transfer out' });
     } else if (type === 'TRFOUT') {
       items.push({ ...base, action: 'XOut', guessed: true });
+    } else if (type === 'NRT') {  // non-resident (withholding) tax on a foreign dividend; no security named
+      items.push({ ...base, action: 'MiscExp', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') || 'Non-resident tax' });
     } else if (type === 'FEE') {
       items.push({ ...base, action: 'MiscExp', memo: desc.replace(/\s*\(executed at.*\)\s*$/i, '') });
     } else if (type === 'FPLINT') {  // "Stock lending monthly interest payment" — cash income

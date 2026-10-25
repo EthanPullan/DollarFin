@@ -195,3 +195,10 @@ test('TRFOUTTF (tax-free cash transfer out) becomes an XOut', () => {
   const [r] = Q.buildOutput(items, OPTS);
   assert.deepEqual(plain([r.action, r.amount, r.memo, r.transferAccount]), ['XOut', '600.00', 'Transfer out', 'Chequing']);
 });
+
+test('NRT (non-resident tax on a foreign dividend) becomes a MiscExp with a memo', () => {
+  const { items, warnings } = Q.convert(month('"2026-09-30","NRT","Non-resident tax (executed at 2026-09-30)","-0.06","5.03","CAD"'));
+  assert.equal(warnings.length, 0);
+  const [r] = Q.buildOutput(items, OPTS);
+  assert.deepEqual(plain([r.action, r.amount, r.memo, r.security]), ['MiscExp', '-0.06', 'Non-resident tax', '']);
+});

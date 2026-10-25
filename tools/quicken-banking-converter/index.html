@@ -352,7 +352,7 @@ const statementAccount = name => ({
   id: (name.match(/-([A-Z0-9]{8,})-\d{4}-\d{2}-\d{2}(?:\s*\(\d+\))?\.csv$/i) || [])[1] || name,
   label: name.replace(/\.csv$/i, '').split(/-monthly-statement/i)[0].replace(/_+/g, ' ').trim() || 'Wealthsimple',
 });
-const STATEMENT_PAYEE = { INT: 'Interest', FPLINT: 'Interest', FEE: 'Fee', CONT: 'Contribution',
+const STATEMENT_PAYEE = { INT: 'Interest', FPLINT: 'Interest', FEE: 'Fee', NRT: 'Non-resident tax', CONT: 'Contribution',
   TRFIN: 'Transfer in', TRFINTF: 'Transfer in', TRFOUT: 'Transfer out', TRFOUTTF: 'Transfer out' };
 
 // A cash account's monthly statement (date, transaction, description, amount, balance, currency).
