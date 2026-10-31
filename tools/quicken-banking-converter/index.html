@@ -161,6 +161,10 @@
   tr.st-new td:first-child,tr.st-kept td:first-child{box-shadow:inset 3px 0 0 var(--board);}
   tr.st-quicken td{background:#fdf5e8;} tr.st-quicken td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
   tr.st-repeat td{background:#eef4f9;} tr.st-repeat td:first-child{box-shadow:inset 3px 0 0 var(--together);}
+  input.unknown{border-color:var(--accent) !important;background:var(--accent-soft) !important;}
+  .linkbtn.pick{color:var(--board);font-size:11.5px;}
+  #merchTable td:nth-child(2){width:1%;}
+  #merchTable td:nth-child(3),#merchTable td:nth-child(4){width:32%;}
   .hidden{display:none !important;}
 
   @media (max-width:880px){
@@ -239,7 +243,7 @@
       </section>
 
       <section class="section">
-        <p class="hint" style="margin:0">Account names, payees, categories and the lists from your Quicken export are remembered on this device only.
+        <p class="hint" style="margin:0">Account names, payees, categories and the lists from your last Quicken export are remembered on this device only (never uploaded). A newer QIF refreshes the lists.
           <button type="button" class="linkbtn" id="forget">Forget them</button></p>
       </section>
     </aside>
@@ -270,6 +274,14 @@
             <span id="catHint"></span></p>
           <div class="scroll"><table class="sec-table" id="kindTable"></table></div>
           <datalist id="catList"></datalist><datalist id="acctList"></datalist>
+        </div>
+
+        <div class="card hidden" id="merchSection">
+          <div class="card-head"><h2 class="section-title">Card merchants</h2><span class="count-pill" id="merchPill"></span></div>
+          <p class="hint" style="margin:0 0 9px">Quicken's CSV import leaves categories blank and doesn't rename payees, so set them here, once per merchant. Your choices are remembered on this device; clear a box to go back to the suggestion from your latest QIF.
+            <span id="merchHint"></span> A category in amber isn't in your Quicken list: Quicken would create it as a new category.</p>
+          <div class="scroll"><table class="sec-table" id="merchTable"></table></div>
+          <datalist id="payeeList"></datalist>
         </div>
 
         <div class="card hidden" id="previewSection">
@@ -483,6 +495,20 @@ function formatDate(iso, fmt = 'mdy') {
   return fmt === 'ymd' ? iso : fmt === 'dmy' ? `${d}/${m}/${y}` : `${m}/${d}/${y}`;
 }
 
+// Card merchants: "BEAN CAFE #12" and "BEAN CAFE #340" are one merchant.
+const merchantKey = s => String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+// The Quicken memorized payee a merchant's name contains (longest wins), with its category when there's
+// only one — Quicken's CSV import doesn't apply memorized payees itself (confirmed by a test import).
+function suggestMerchant(details, memorized = []) {
+  const d = ' ' + merchantKey(details) + ' ';
+  let best = null, bestLen = 0;
+  memorized.forEach(m => {
+    const n = merchantKey(m.name);
+    if (n.length > 2 && n.length > bestLen && d.includes(' ' + n + ' ')) { best = m; bestLen = n.length; }
+  });
+  return best && { payee: best.name, category: best.cats.length === 1 ? best.cats[0] : '', options: best.cats };
+}
+
 // opts: { dateMode, dateFmt, accounts: { [accountId]: { name, include } }, kinds: { [kind]: { payee, category } } }
 function buildOutput(items, opts) {
   return items
@@ -493,9 +519,13 @@ function buildOutput(items, opts) {
       const k = opts.kinds[it.kind] || {};
       const r = Object.fromEntries(FIELDS.map(h => [h, '']));
       r.date = formatDate(iso, opts.dateFmt);
-      r.payee = (k.payee || '').trim() || it.defaultPayee;   // blank → the row's own payee (a card's merchant)
+      // Card purchases: the merchant's own payee/category (set by you, else suggested from Quicken's memorized
+      // payees) unless the kind sets one for every row.
+      const m = it.perRowPayee ? (opts.merchants || {})[merchantKey(it.desc)] || {} : {};
+      const sg = it.perRowPayee ? suggestMerchant(it.desc, opts.memorized) : null;
+      r.payee = (k.payee || '').trim() || String(m.payee ?? sg?.payee ?? '').trim() || it.defaultPayee;
       r.amount = it.amt.toFixed(2);
-      r.category = (k.category || '').trim();
+      r.category = (it.perRowPayee ? String(m.category ?? sg?.category ?? '').trim() : '') || (k.category || '').trim();
       r.account = (opts.accounts[it.accountId].name || '').trim();
       r.memo = it.memo ?? it.desc;
       r._id = it.id;
@@ -564,14 +594,16 @@ function qifDate(s) {
   const y = m[4].length === 4 ? m[4] : String((m[3] === "'" ? 2000 : 1900) + +m[4]);
   return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
 }
-// Also collects the category list (!Type:Cat) and account names, offered as suggestions in the tools.
+// Also collects the category list (!Type:Cat), account names, and memorized payees with the categories
+// used with each (!Type:Memorized), offered as suggestions in the tools.
 function readQuickenQif(text) {
-  const body = [], categories = new Set(), accounts = new Map();
-  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, rec = {};
+  const body = [], categories = new Set(), accounts = new Map(), memorized = new Map();
+  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, inMem = false, rec = {};
   text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
     if (line[0] === '!') {
       inCat = /^!Type:Cat/i.test(line);
       inAcct = /^!Account/i.test(line);
+      inMem = /^!Type:Memorized/i.test(line);
       if (/^!Account/i.test(line)) inTxns = false;
       else if (QIF_TXN_TYPES.test(line)) { inTxns = true; account = listAccount; }
       else if (/^!Type:/i.test(line)) inTxns = false;
@@ -580,6 +612,16 @@ function readQuickenQif(text) {
     }
     const code = line[0], val = line.slice(1).trim();
     if (inCat) { if (code === 'N' && val) categories.add(val); return; }
+    if (inMem) {
+      if (code === '^') {
+        if (rec.P && rec.L && !/^\[/.test(rec.L)) {
+          const c = memorized.get(rec.P) || new Map();
+          memorized.set(rec.P, c.set(rec.L, (c.get(rec.L) || 0) + 1));
+        }
+        rec = {};
+      } else if ((code === 'P' || code === 'L') && !(code in rec)) rec[code] = val;
+      return;
+    }
     if (!inTxns) {
       if (!inAcct) return;   // memorized payees, securities, prices… also use N and T
       // inside an !Account block: N = name, T = type
@@ -596,7 +638,8 @@ function readQuickenQif(text) {
     } else if ('DTUPMNYL'.includes(code) && !(code in rec)) rec[code] = val;   // L: category, or [Account] for a transfer
   });
   return { header: ['Date', 'Account', 'Payee', 'Amount', 'Category'], body, map: { date: 0, account: 1, payee: 2, amount: 3, category: 4 }, order: 'ymd', qif: true,
-    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
+    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })),
+    memorized: [...memorized].map(([name, c]) => ({ name, cats: [...c].sort((a, b) => b[1] - a[1]).map(x => x[0]) })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
 // Amount is either one column ({ amount }) or a deposit/payment pair ({ credit, debit }).
@@ -614,7 +657,7 @@ function readQuickenExport(text) {
   const order = detectDateOrder(body.map(r => r[map.date]));
   // Suggestions from a CSV report: the categories and accounts its rows use ([Transfer] entries aren't categories).
   const distinct = i => i < 0 ? [] : [...new Set(body.map(r => r[i]).filter(v => v && !/^\[/.test(v) && !/total/i.test(v)))].sort((a, b) => a.localeCompare(b));
-  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })) };
+  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })), memorized: [] };
 }
 // Transaction rows only: totals, blank lines and split lines without a date are dropped.
 function quickenRows(qx, map, order) {
@@ -695,11 +738,23 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
   // Saved as dateFormat: the earlier dateFmt setting defaulted to MM/DD/YYYY, which Quicken Canada rejects.
   let dateFmt = DATE_FORMATS[saved.dateFormat] ? saved.dateFormat : 'ymd';
   // Category and account names from the last Quicken export, offered as dropdown suggestions.
-  let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [];
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, dateFormat: dateFmt, accounts, kinds, qkCats, qkAccts })); } catch (e) {} };
+  // The last Quicken export's lists, kept on this device so the dropdowns work before a QIF is dropped in;
+  // each new QIF replaces them, so Quicken stays the source of truth.
+  let qkCats = saved.qkCats || [], qkAccts = saved.qkAccts || [], qkMem = saved.qkMem || [];
+  const merchants = saved.merchants || {};   // merchantKey → { payee, category } you chose for card purchases
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ dateMode, dateFormat: dateFmt, accounts, kinds, merchants, qkCats, qkAccts, qkMem })); } catch (e) {} };
+  // A category Quicken doesn't have is created silently on import (confirmed by a test import), so flag it.
+  function markUnknown(root) {
+    root.querySelectorAll('input[data-f=category]').forEach(inp => {
+      const v = inp.value.trim(), unknown = !!(qkCats.length && v && !qkCats.includes(v));
+      inp.classList.toggle('unknown', unknown);
+      inp.title = unknown ? 'Not in your Quicken category list — Quicken would create it as a new category' : '';
+    });
+  }
   function fillLists() {
     $('catList').innerHTML = qkCats.map(c => `<option value="${esc(c)}">`).join('');
     $('acctList').innerHTML = qkAccts.map(a => `<option value="${esc(a)}">`).join('');
+    $('payeeList').innerHTML = qkMem.map(m => `<option value="${esc(m.name)}">`).join('');
     $('catHint').textContent = qkCats.length ? `The ${qkCats.length} categories from your Quicken export are in each Category dropdown.`
       : 'Add a Quicken QIF export (left) to pick categories from a list.';
   }
@@ -770,12 +825,46 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
         <td><input type="text" data-k="${esc(kind)}" data-f="category" list="catList" value="${esc(kinds[kind]?.category ?? '')}" placeholder="${qkCats.length ? 'Pick or type a category' : 'e.g. Interest Inc'}"></td></tr>`).join('');
     $('kindSection').classList.toggle('hidden', ks.size === 0);
     $('kindTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
-      (kinds[inp.dataset.k] ||= {})[inp.dataset.f] = inp.value; save(); render();
+      (kinds[inp.dataset.k] ||= {})[inp.dataset.f] = inp.value; markUnknown($('kindTable')); save(); render();
     }));
+    markUnknown($('kindTable'));
+    renderMerchants();
     render();
   }
 
-  const allRows = (src = items) => buildOutput(src, { dateMode, dateFmt, accounts, kinds });
+  // Card purchases: one row per merchant, with the payee and category Quicken should get.
+  function renderMerchants() {
+    const ms = new Map();
+    items.filter(i => i.perRowPayee && (accounts[i.accountId] || {}).include).forEach(i => {
+      const key = merchantKey(i.desc), e = ms.get(key);
+      if (e) e.n++; else ms.set(key, { n: 1, desc: i.desc, sg: suggestMerchant(i.desc, qkMem) });
+    });
+    const list = [...ms].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+    const done = list.filter(([key, { sg }]) => String(merchants[key]?.category ?? sg?.category ?? '').trim()).length;
+    $('merchSection').classList.toggle('hidden', !list.length);
+    $('merchPill').textContent = `${done} of ${list.length} categorised`;
+    $('merchHint').textContent = qkMem.length ? `Suggested from your ${qkMem.length} Quicken memorized payees; payees memorized with several categories show the choices.`
+      : 'Add a Quicken QIF export (left) to suggest payees and categories from your memorized payees.';
+    $('merchTable').innerHTML = '<tr><th>Merchant</th><th>Rows</th><th>Quicken payee</th><th>Quicken category</th></tr>' +
+      list.map(([key, { n, desc, sg }]) => {
+        const m = merchants[key] || {}, choices = sg && sg.options.length > 1 ? sg.options : [];
+        return `<tr><td>${esc(desc)}</td><td class="num">${n}</td>
+          <td><input type="text" data-m="${esc(key)}" data-f="payee" list="payeeList" value="${esc(m.payee ?? sg?.payee ?? '')}" placeholder="${esc(desc)}"></td>
+          <td><input type="text" data-m="${esc(key)}" data-f="category" list="catList" value="${esc(m.category ?? sg?.category ?? '')}"
+            placeholder="${choices.length ? 'choose one below' : 'Pick or type a category'}">${choices.length ? `<div class="why">Quicken uses: ${choices.map(c => `<button type="button" class="linkbtn pick" data-m="${esc(key)}" data-c="${esc(c)}">${esc(c)}</button>`).join(' · ')}</div>` : ''}</td></tr>`;
+      }).join('');
+    $('merchTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      const m = merchants[inp.dataset.m] ||= {};
+      if (inp.value.trim()) m[inp.dataset.f] = inp.value; else delete m[inp.dataset.f];   // blank → the QIF's suggestion
+      markUnknown($('merchTable')); save(); render();
+    }));
+    $('merchTable').querySelectorAll('.pick').forEach(b => b.addEventListener('click', () => {
+      (merchants[b.dataset.m] ||= {}).category = b.dataset.c; save(); renderMerchants(); render();
+    }));
+    markUnknown($('merchTable'));
+  }
+
+  const allRows = (src = items) => buildOutput(src, { dateMode, dateFmt, accounts, kinds, merchants, memorized: qkMem });
   const repeatRows = () => allRows(dropped);
   let dropped = [], repeatOf = new Map();
 
@@ -787,6 +876,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     if (!qx) { alert(`Couldn't find a Date column and an Amount (or Payment/Deposit) column in ${file.name}.`); return; }
     Object.assign(qk, { name: file.name, qx, map: { ...qx.map }, order: qx.order, keep: {} });
     if (qx.categories.length) qkCats = qx.categories;
+    if (qx.memorized.length) qkMem = qx.memorized;
     if (qx.accounts.length) qkAccts = qx.accounts.map(a => a.name);
     save(); fillLists(); refresh();
     const accts = qkAccounts(), want = Object.values(accounts).filter(a => a.include).map(a => (a.name || '').trim()).find(n => accts.includes(n)) || '';
@@ -985,7 +1075,8 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     if (!confirm('Forget the saved account names, payees and categories on this device?')) return;
     try { localStorage.removeItem(LS); } catch (e) {}
     [accounts, kinds].forEach(o => Object.keys(o).forEach(k => delete o[k]));
-    qkCats = []; qkAccts = []; fillLists();
+    qkCats = []; qkAccts = []; qkMem = []; fillLists();
+    Object.keys(merchants).forEach(k => delete merchants[k]);
     refresh();
   });
 

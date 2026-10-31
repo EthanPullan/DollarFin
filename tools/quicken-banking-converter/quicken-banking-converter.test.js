@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting, nearMisses })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting, nearMisses, merchantKey, suggestMerchant })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -238,4 +238,34 @@ test('credit card statement: signs flipped for Quicken, merchant as payee, payme
   // a payee set for the purchase kind overrides every row; blank falls back to each merchant
   const k = { 'Card|Purchase|out': { payee: '' } };
   assert.equal(Q.buildOutput(items, { ...opts, kinds: k })[0].payee, 'COFFEE SHOP #12');
+});
+
+test('memorized payees from a QIF: each payee with its categories, most used first; transfers left out', () => {
+  const qx = Q.readQuickenExport(['!Type:Memorized',
+    'KP', 'T-5.00', 'PBean Cafe', 'LFood:Coffee', '^', 'KP', 'T-6.00', 'PBean Cafe', 'LFood:Coffee', '^',
+    'KP', 'T-9.00', 'PBean Cafe', 'LGifts', '^', 'KP', 'T-50.00', 'PCard Payment', 'L[Chequing]', '^'].join('\r\n'));
+  assert.deepEqual(plain(qx.memorized), [{ name: 'Bean Cafe', cats: ['Food:Coffee', 'Gifts'] }]);
+});
+
+test('suggestMerchant: longest memorized payee inside the merchant name; category only when unambiguous', () => {
+  const mem = [{ name: 'Bean', cats: ['Food'] }, { name: 'Bean Cafe', cats: ['Food:Coffee'] }, { name: 'Mega Mart', cats: ['Groceries', 'Shopping'] }];
+  assert.equal(Q.merchantKey('BEAN CAFE #12 TORONTO'), 'bean cafe toronto');
+  assert.deepEqual(plain(Q.suggestMerchant('BEAN CAFE #12', mem)), { payee: 'Bean Cafe', category: 'Food:Coffee', options: ['Food:Coffee'] });
+  assert.deepEqual(plain(Q.suggestMerchant('MEGA MART 0042', mem)), { payee: 'Mega Mart', category: '', options: ['Groceries', 'Shopping'] });
+  assert.equal(Q.suggestMerchant('UNKNOWN PLACE', mem), null);
+  assert.equal(Q.suggestMerchant('BEANSTALK LTD', mem), null);   // whole words only
+});
+
+test('card purchases: your merchant choice beats the QIF suggestion, which beats the kind category', () => {
+  const card = Q.toObjects(Q.parseCSV(['"transaction_date","post_date","type","details","amount","currency"',
+    '"2026-03-01","2026-03-02","Purchase","BEAN CAFE #12","4.50","CAD"',
+    '"2026-03-02","2026-03-03","Purchase","MEGA MART 0042","30.00","CAD"',
+    '"2026-03-03","2026-03-04","Purchase","NEW PLACE","8.00","CAD"'].join('\n')));
+  const items = Q.combine([{ id: 1, name: 'c.csv', objs: card }]).items;
+  const base = { dateMode: 'executed', accounts: { 'wealthsimple-credit-card': { name: 'Card', include: true } },
+    kinds: { 'Card|Purchase|out': { category: 'Misc' } }, memorized: [{ name: 'Bean Cafe', cats: ['Food:Coffee'] }, { name: 'Mega Mart', cats: ['Groceries', 'Shopping'] }] };
+  const out = o => plain(Q.buildOutput(items, o).map(r => [r.payee, r.category]));
+  assert.deepEqual(out(base), [['Bean Cafe', 'Food:Coffee'], ['Mega Mart', 'Misc'], ['NEW PLACE', 'Misc']]);
+  assert.deepEqual(out({ ...base, merchants: { 'mega mart': { category: 'Groceries' }, 'new place': { payee: 'New Place' } } }),
+    [['Bean Cafe', 'Food:Coffee'], ['Mega Mart', 'Groceries'], ['New Place', 'Misc']]);
 });

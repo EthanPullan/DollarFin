@@ -490,14 +490,16 @@ function qifDate(s) {
   const y = m[4].length === 4 ? m[4] : String((m[3] === "'" ? 2000 : 1900) + +m[4]);
   return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
 }
-// Also collects the category list (!Type:Cat) and account names, offered as suggestions in the tools.
+// Also collects the category list (!Type:Cat), account names, and memorized payees with the categories
+// used with each (!Type:Memorized), offered as suggestions in the tools.
 function readQuickenQif(text) {
-  const body = [], categories = new Set(), accounts = new Map();
-  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, rec = {};
+  const body = [], categories = new Set(), accounts = new Map(), memorized = new Map();
+  let account = '', listAccount = '', listType = '', inTxns = false, inCat = false, inAcct = false, inMem = false, rec = {};
   text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
     if (line[0] === '!') {
       inCat = /^!Type:Cat/i.test(line);
       inAcct = /^!Account/i.test(line);
+      inMem = /^!Type:Memorized/i.test(line);
       if (/^!Account/i.test(line)) inTxns = false;
       else if (QIF_TXN_TYPES.test(line)) { inTxns = true; account = listAccount; }
       else if (/^!Type:/i.test(line)) inTxns = false;
@@ -506,6 +508,16 @@ function readQuickenQif(text) {
     }
     const code = line[0], val = line.slice(1).trim();
     if (inCat) { if (code === 'N' && val) categories.add(val); return; }
+    if (inMem) {
+      if (code === '^') {
+        if (rec.P && rec.L && !/^\[/.test(rec.L)) {
+          const c = memorized.get(rec.P) || new Map();
+          memorized.set(rec.P, c.set(rec.L, (c.get(rec.L) || 0) + 1));
+        }
+        rec = {};
+      } else if ((code === 'P' || code === 'L') && !(code in rec)) rec[code] = val;
+      return;
+    }
     if (!inTxns) {
       if (!inAcct) return;   // memorized payees, securities, prices… also use N and T
       // inside an !Account block: N = name, T = type
@@ -522,7 +534,8 @@ function readQuickenQif(text) {
     } else if ('DTUPMNYL'.includes(code) && !(code in rec)) rec[code] = val;   // L: category, or [Account] for a transfer
   });
   return { header: ['Date', 'Account', 'Payee', 'Amount', 'Category'], body, map: { date: 0, account: 1, payee: 2, amount: 3, category: 4 }, order: 'ymd', qif: true,
-    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })) };
+    categories: [...categories].sort((a, b) => a.localeCompare(b)), accounts: [...accounts].map(([name, type]) => ({ name, type })),
+    memorized: [...memorized].map(([name, c]) => ({ name, cats: [...c].sort((a, b) => b[1] - a[1]).map(x => x[0]) })) };
 }
 // Finds the header row (report title lines come first in Quicken exports) and guesses the columns.
 // Amount is either one column ({ amount }) or a deposit/payment pair ({ credit, debit }).
@@ -540,7 +553,7 @@ function readQuickenExport(text) {
   const order = detectDateOrder(body.map(r => r[map.date]));
   // Suggestions from a CSV report: the categories and accounts its rows use ([Transfer] entries aren't categories).
   const distinct = i => i < 0 ? [] : [...new Set(body.map(r => r[i]).filter(v => v && !/^\[/.test(v) && !/total/i.test(v)))].sort((a, b) => a.localeCompare(b));
-  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })) };
+  return { header, body, map, order, categories: distinct(col(QK_COLS.category)), accounts: distinct(map.account).map(name => ({ name, type: '' })), memorized: [] };
 }
 // Transaction rows only: totals, blank lines and split lines without a date are dropped.
 function quickenRows(qx, map, order) {
