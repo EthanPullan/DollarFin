@@ -189,7 +189,7 @@
       <section class="section">
         <h2 class="section-title">1 · Exports &amp; statements</h2>
         <label class="drop" id="drop" for="file">
-          <b>Drop Wealthsimple CSVs here</b>activities exports, monthly statements or credit card statements — pick several at once, or add more later
+          <b>Drop Wealthsimple CSVs here</b>activities exports, monthly statements, credit card statements or credit card activities — pick several at once, or add more later
         </label>
         <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
         <ul class="files" id="fileList"></ul>
@@ -402,23 +402,52 @@ function convertStatement(objs, name) {
 // file names no account, so every card row shares one account id, named by the user.
 const CARD_ACCOUNT = 'wealthsimple-credit-card';
 const CARD_PAYEE = { Payment: 'Payment', Interest: 'Interest charge', Fee: 'Fee' };
+// One card row in Quicken's signs. The overlap key is date + amount + merchant (or type, for payments)
+// + which repeat of that it is in its file, so a statement and an activities export of the same days
+// line up (their merchant spelling differs only in case), while two real same-day coffees stay two.
+function cardItem({ idx, date, postDate, type, merchant, amt, wsCategory }, seen) {
+  const details = String(merchant || '').replace(/\s+/g, ' ').trim(), dir = amt < 0 ? 'out' : 'in';
+  const perRow = !CARD_PAYEE[type];   // purchases and refunds: the merchant is the payee
+  const base = ['card', date, amt.toFixed(2), perRow ? merchantKey(details) : type].join('|');
+  const occ = seen[base] = (seen[base] ?? -1) + 1;
+  return {
+    id: idx, line: idx + 2, amt, desc: details, memo: perRow ? '' : details, wsCategory: wsCategory || '',
+    effDate: postDate || date, execDate: date || postDate,
+    accountId: CARD_ACCOUNT, accountType: 'Credit card',
+    kind: ['Card', type, dir].join('|'), kindLabel: type, kindDetail: 'credit card',
+    defaultPayee: perRow ? details : CARD_PAYEE[type], perRowPayee: perRow,
+    key: base + '|' + occ,
+  };
+}
+// A Wealthsimple credit card statement (transaction_date, post_date, type, details, amount). Its signs are
+// the card's view (a purchase is positive); Quicken's are net worth's, so they're flipped. The file names
+// no account, so every card row shares one account id, named by the user.
 function convertCreditCard(objs) {
-  const items = [], warnings = [];
+  const items = [], warnings = [], seen = {};
   objs.forEach((o, idx) => {
     if (o.currency && o.currency.toUpperCase() !== 'CAD') { warnings.push(`Line ${idx + 2}: ${o.currency} amount, row skipped.`); return; }
     const amt = -parseFloat(String(o.amount).replace(/,/g, ''));
     if (!Number.isFinite(amt)) { warnings.push(`Line ${idx + 2}: no amount, row skipped.`); return; }
-    const type = o.type || 'Other', details = String(o.details || '').replace(/\s+/g, ' ').trim(), dir = amt < 0 ? 'out' : 'in';
-    const perRow = !CARD_PAYEE[type];   // purchases and refunds: the merchant is the payee
-    items.push({
-      id: idx, line: idx + 2, amt, desc: details, memo: perRow ? '' : details,
-      effDate: o.post_date || o.transaction_date, execDate: o.transaction_date || o.post_date,
-      accountId: CARD_ACCOUNT, accountType: 'Credit card',
-      kind: ['Card', type, dir].join('|'), kindLabel: type, kindDetail: 'credit card',
-      defaultPayee: perRow ? details : CARD_PAYEE[type], perRowPayee: perRow,
-      key: Object.values(o).join('|'),
-    });
+    items.push(cardItem({ idx, date: o.transaction_date, postDate: o.post_date, type: o.type || 'Other', merchant: o.details, amt }, seen));
   });
+  return { items, warnings };
+}
+// A Wealthsimple credit card activities export (transaction_date, transaction_type, status, merchant,
+// amount, currency, notes, category) — any date range, so it covers the current month. Signs are already
+// net worth's. Only completed rows: a pending charge can still change. Wealthsimple's category is kept as
+// a hint for choosing the Quicken one.
+function convertCardActivities(objs) {
+  const items = [], warnings = [], seen = {};
+  let pending = 0;
+  objs.forEach((o, idx) => {
+    if (o.status && !/^completed$/i.test(o.status)) { pending++; return; }
+    if (o.currency && o.currency.toUpperCase() !== 'CAD') { warnings.push(`Line ${idx + 2}: ${o.currency} amount, row skipped.`); return; }
+    const amt = parseFloat(String(o.amount).replace(/,/g, ''));
+    if (!Number.isFinite(amt)) { warnings.push(`Line ${idx + 2}: no amount, row skipped.`); return; }
+    items.push(cardItem({ idx, date: o.transaction_date, type: o.transaction_type || 'Other', merchant: o.merchant || o.notes,
+      amt, wsCategory: /^uncategori[sz]ed$/i.test(o.category || '') ? '' : o.category }, seen));
+  });
+  if (pending) warnings.push(`${pending} row(s) not yet completed (pending) were left out — they'll come through in a later download.`);
   return { items, warnings };
 }
 
@@ -428,6 +457,7 @@ function convert(objs, name = '') {
   const items = [], warnings = [];
   if (objs.length && ['date', 'transaction', 'amount'].every(k => k in objs[0])) return convertStatement(objs, name);
   if (objs.length && ['transaction_date', 'post_date', 'details', 'amount'].every(k => k in objs[0])) return convertCreditCard(objs);
+  if (objs.length && ['transaction_date', 'transaction_type', 'merchant', 'amount'].every(k => k in objs[0])) return convertCardActivities(objs);
   if (!objs.length || !('net_cash_amount' in objs[0]) || !('effective_date' in objs[0])) {
     warnings.push('This doesn\'t look like a Wealthsimple activities export, monthly statement or credit card statement, file skipped.');
     return { items, warnings };
@@ -508,6 +538,24 @@ function suggestMerchant(details, memorized = []) {
   });
   return best && { payee: best.name, category: best.cats.length === 1 ? best.cats[0] : '', options: best.cats };
 }
+// The Quicken category for a Wealthsimple category name: same name (any case), else the one Quicken
+// category whose last part matches ("Groceries" → "Food & Dining:Groceries").
+function quickenCategoryFor(wsCat, quickenCats = []) {
+  const w = String(wsCat || '').trim().toLowerCase();
+  if (!w) return '';
+  const exact = quickenCats.find(c => c.toLowerCase() === w);
+  if (exact) return exact;
+  const leaf = quickenCats.filter(c => c.split(':').pop().toLowerCase() === w);
+  return leaf.length === 1 ? leaf[0] : '';
+}
+// Suggested category for a card purchase: the memorized payee's (if it has one), else whichever of its
+// categories matches Wealthsimple's category, else the Quicken category named like Wealthsimple's.
+function cardCategory(sg, wsCat, quickenCats) {
+  if (sg && sg.category) return sg.category;
+  const ws = quickenCategoryFor(wsCat, quickenCats);
+  if (sg && sg.options.length > 1) return sg.options.includes(ws) ? ws : '';
+  return ws;
+}
 
 // opts: { dateMode, dateFmt, accounts: { [accountId]: { name, include } }, kinds: { [kind]: { payee, category } } }
 function buildOutput(items, opts) {
@@ -525,7 +573,7 @@ function buildOutput(items, opts) {
       const sg = it.perRowPayee ? suggestMerchant(it.desc, opts.memorized) : null;
       r.payee = (k.payee || '').trim() || String(m.payee ?? sg?.payee ?? '').trim() || it.defaultPayee;
       r.amount = it.amt.toFixed(2);
-      r.category = (it.perRowPayee ? String(m.category ?? sg?.category ?? '').trim() : '') || (k.category || '').trim();
+      r.category = (it.perRowPayee ? String(m.category ?? cardCategory(sg, it.wsCategory, opts.quickenCats)).trim() : '') || (k.category || '').trim();
       r.account = (opts.accounts[it.accountId].name || '').trim();
       r.memo = it.memo ?? it.desc;
       r._id = it.id;
@@ -837,20 +885,21 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     const ms = new Map();
     items.filter(i => i.perRowPayee && (accounts[i.accountId] || {}).include).forEach(i => {
       const key = merchantKey(i.desc), e = ms.get(key);
-      if (e) e.n++; else ms.set(key, { n: 1, desc: i.desc, sg: suggestMerchant(i.desc, qkMem) });
+      if (e) { e.n++; e.ws ||= i.wsCategory; } else ms.set(key, { n: 1, desc: i.desc, ws: i.wsCategory, sg: suggestMerchant(i.desc, qkMem) });
     });
     const list = [...ms].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
-    const done = list.filter(([key, { sg }]) => String(merchants[key]?.category ?? sg?.category ?? '').trim()).length;
+    const sugCat = (sg, ws) => cardCategory(sg, ws, qkCats);
+    const done = list.filter(([key, { sg, ws }]) => String(merchants[key]?.category ?? sugCat(sg, ws)).trim()).length;
     $('merchSection').classList.toggle('hidden', !list.length);
     $('merchPill').textContent = `${done} of ${list.length} categorised`;
     $('merchHint').textContent = qkMem.length ? `Suggested from your ${qkMem.length} Quicken memorized payees; payees memorized with several categories show the choices.`
       : 'Add a Quicken QIF export (left) to suggest payees and categories from your memorized payees.';
     $('merchTable').innerHTML = '<tr><th>Merchant</th><th>Rows</th><th>Quicken payee</th><th>Quicken category</th></tr>' +
-      list.map(([key, { n, desc, sg }]) => {
+      list.map(([key, { n, desc, sg, ws }]) => {
         const m = merchants[key] || {}, choices = sg && sg.options.length > 1 ? sg.options : [];
-        return `<tr><td>${esc(desc)}</td><td class="num">${n}</td>
+        return `<tr><td>${esc(desc)}${ws ? `<div class="why">Wealthsimple: ${esc(ws)}</div>` : ''}</td><td class="num">${n}</td>
           <td><input type="text" data-m="${esc(key)}" data-f="payee" list="payeeList" value="${esc(m.payee ?? sg?.payee ?? '')}" placeholder="${esc(desc)}"></td>
-          <td><input type="text" data-m="${esc(key)}" data-f="category" list="catList" value="${esc(m.category ?? sg?.category ?? '')}"
+          <td><input type="text" data-m="${esc(key)}" data-f="category" list="catList" value="${esc(m.category ?? sugCat(sg, ws))}"
             placeholder="${choices.length ? 'choose one below' : 'Pick or type a category'}">${choices.length ? `<div class="why">Quicken uses: ${choices.map(c => `<button type="button" class="linkbtn pick" data-m="${esc(key)}" data-c="${esc(c)}">${esc(c)}</button>`).join(' · ')}</div>` : ''}</td></tr>`;
       }).join('');
     $('merchTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
@@ -864,7 +913,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     markUnknown($('merchTable'));
   }
 
-  const allRows = (src = items) => buildOutput(src, { dateMode, dateFmt, accounts, kinds, merchants, memorized: qkMem });
+  const allRows = (src = items) => buildOutput(src, { dateMode, dateFmt, accounts, kinds, merchants, memorized: qkMem, quickenCats: qkCats });
   const repeatRows = () => allRows(dropped);
   let dropped = [], repeatOf = new Map();
 

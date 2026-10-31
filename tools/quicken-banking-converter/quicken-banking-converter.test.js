@@ -9,7 +9,7 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const core = /<script id="core">([\s\S]*?)<\/script>/.exec(html)[1];
-const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting, nearMisses, merchantKey, suggestMerchant })', {});
+const Q = vm.runInNewContext(core + ';({ HEADER_LINE, FIELDS, parseCSV, toObjects, convert, combine, buildOutput, toCSV, parseMoney, detectDateOrder, toIsoDate, readQuickenExport, quickenRows, matchExisting, nearMisses, merchantKey, suggestMerchant, quickenCategoryFor, cardCategory })', {});
 
 /* vm objects come from another realm; round-trip through JSON so deepEqual compares plain data */
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -268,4 +268,52 @@ test('card purchases: your merchant choice beats the QIF suggestion, which beats
   assert.deepEqual(out(base), [['Bean Cafe', 'Food:Coffee'], ['Mega Mart', 'Misc'], ['NEW PLACE', 'Misc']]);
   assert.deepEqual(out({ ...base, merchants: { 'mega mart': { category: 'Groceries' }, 'new place': { payee: 'New Place' } } }),
     [['Bean Cafe', 'Food:Coffee'], ['Mega Mart', 'Groceries'], ['New Place', 'Misc']]);
+});
+
+const CARD_STMT = (...l) => Q.toObjects(Q.parseCSV(['"transaction_date","post_date","type","details","amount","currency"', ...l].join('\n')));
+const CARD_ACT = (...l) => Q.toObjects(Q.parseCSV(['transaction_date,transaction_type,status,merchant,amount,currency,notes,category', ...l].join('\n')));
+const CARD_OPTS = { dateMode: 'executed', dateFmt: 'ymd', kinds: {}, accounts: { 'wealthsimple-credit-card': { name: 'Card', include: true } } };
+
+test('card activities export: signs kept, pending rows left out, Wealthsimple category kept as a hint', () => {
+  const { items, warnings } = Q.convert(CARD_ACT(
+    '2026-03-04,Purchase,Completed,Bean Cafe #12,-4.50,CAD,,Coffee',
+    '2026-03-05,Purchase,Pending,Mega Mart,-30.00,CAD,,Groceries',
+    '2026-03-06,Payment,Completed,,100.00,CAD,,Uncategorized'));
+  assert.match(warnings[0], /1 row\(s\) not yet completed/);
+  assert.deepEqual(plain(Q.buildOutput(items, CARD_OPTS).map(r => [r.date, r.payee, r.amount]) ), [
+    ['2026-03-04', 'Bean Cafe #12', '-4.50'], ['2026-03-06', 'Payment', '100.00']]);
+  assert.deepEqual(plain(items.map(i => i.wsCategory)), ['Coffee', '']);
+});
+
+test('a statement and an activities export of the same days line up; same-day repeats count by occurrence', () => {
+  const stmt = CARD_STMT(
+    '"2026-03-04","2026-03-05","Purchase","BEAN CAFE #12","4.50","CAD"',
+    '"2026-03-04","2026-03-05","Purchase","BEAN CAFE #12","4.50","CAD"',
+    '"2026-03-06","2026-03-06","Payment","From chequing account","-100.0","CAD"');
+  const act = CARD_ACT(
+    '2026-03-08,Purchase,Completed,Mega Mart #3,-30.00,CAD,,Groceries',
+    '2026-03-06,Payment,Completed,,100.00,CAD,,Uncategorized',
+    '2026-03-04,Purchase,Completed,Bean Cafe #12,-4.50,CAD,,Coffee',
+    '2026-03-04,Purchase,Completed,Bean Cafe #12,-4.50,CAD,,Coffee',
+    '2026-03-04,Purchase,Completed,Bean Cafe #12,-4.50,CAD,,Coffee');
+  const res = Q.combine([{ id: 1, name: 'credit-card-statement.csv', objs: stmt }, { id: 2, name: 'credit-card-activities.csv', objs: act }]);
+  assert.equal(res.dropped.length, 3);                      // the payment and two of the three coffees
+  // each transaction once, whichever file it came from: three coffees, one payment, one grocery run
+  assert.deepEqual(plain(res.items.map(i => [i.execDate, i.desc.toLowerCase().replace(/[^a-z]/g, ''), i.amt]).filter(x => x[2] !== 100).sort()), [
+    ['2026-03-04', 'beancafe', -4.5], ['2026-03-04', 'beancafe', -4.5], ['2026-03-04', 'beancafe', -4.5], ['2026-03-08', 'megamart', -30]]);
+  assert.equal(res.items.filter(i => i.amt === 100).length, 1);
+  assert.ok(!res.warnings.some(w => /both an activities export and a monthly statement/.test(w)));
+});
+
+test('Wealthsimple category → Quicken category: same name or a unique last part; breaks a memorized tie', () => {
+  const qc = ['Food & Dining:Groceries', 'Food & Dining:Restaurants', 'Pets', 'Home:Supplies', 'Office:Supplies'];
+  assert.equal(Q.quickenCategoryFor('Groceries', qc), 'Food & Dining:Groceries');
+  assert.equal(Q.quickenCategoryFor('pets', qc), 'Pets');
+  assert.equal(Q.quickenCategoryFor('Supplies', qc), '');   // two candidates → no guess
+  assert.equal(Q.quickenCategoryFor('Coffee', qc), '');
+  const tie = { payee: 'Mega Mart', category: '', options: ['Home:Supplies', 'Food & Dining:Groceries'] };
+  assert.equal(Q.cardCategory(tie, 'Groceries', qc), 'Food & Dining:Groceries');
+  assert.equal(Q.cardCategory(tie, 'Pets', qc), '');                                   // not one of its options
+  assert.equal(Q.cardCategory({ payee: 'X', category: 'Pets', options: ['Pets'] }, 'Groceries', qc), 'Pets');   // memorized wins
+  assert.equal(Q.cardCategory(null, 'Restaurants', qc), 'Food & Dining:Restaurants');
 });
