@@ -72,7 +72,7 @@ test('combine sorts exports oldest first and drops rows repeated across files', 
 test('a file that is neither an activities export nor a statement is rejected with a warning', () => {
   const { items, warnings } = Q.convert(Q.toObjects(Q.parseCSV('date, payee, fipayee-unused,amount\n02/15/2026,Someone,,-1.00')));
   assert.equal(items.length, 0);
-  assert.match(warnings[0], /doesn't look like a Wealthsimple activities export or monthly statement/);
+  assert.match(warnings[0], /doesn't look like a Wealthsimple activities export, monthly statement or credit card statement/);
 });
 
 test('toCSV writes Quicken\'s banking header verbatim and quotes fields that need it', () => {
@@ -218,4 +218,24 @@ test('date format choice: MM/DD/YYYY by default, or YYYY-MM-DD / DD/MM/YYYY', ()
   assert.deepEqual(plain(dates()), ['01/05/2026', '01/05/2026', '01/10/2026', '02/01/2026']);
   assert.deepEqual(plain(dates('ymd')), ['2026-01-05', '2026-01-05', '2026-01-10', '2026-02-01']);
   assert.deepEqual(plain(dates('dmy')), ['05/01/2026', '05/01/2026', '10/01/2026', '01/02/2026']);
+});
+
+test('credit card statement: signs flipped for Quicken, merchant as payee, payment as its own kind', () => {
+  const card = Q.toObjects(Q.parseCSV(['"transaction_date","post_date","type","details","amount","currency"',
+    '"2026-03-01","2026-03-02","Purchase","COFFEE  SHOP #12","4.50","CAD"',
+    '"2026-03-01","2026-03-02","Purchase","COFFEE  SHOP #12","4.50","CAD"',
+    '"2026-03-05","2026-03-05","Payment","From chequing account","-100.0","CAD"',
+    '"2026-03-06","2026-03-07","Purchase","ABROAD LTD","9.99","USD"'].join('\n')));
+  const { items, warnings } = Q.combine([{ id: 1, name: 'credit-card-statement-transactions-2026-03-01.csv', objs: card }]);
+  assert.equal(items.length, 3);          // identical same-day purchases are both real
+  assert.match(warnings[0], /USD amount, row skipped/);
+  const opts = { dateMode: 'executed', kinds: {}, accounts: { 'wealthsimple-credit-card': { name: 'My Card', include: true } } };
+  assert.deepEqual(plain(Q.buildOutput(items, opts).map(r => [r.date, r.payee, r.amount, r.memo, r.account])), [
+    ['03/01/2026', 'COFFEE SHOP #12', '-4.50', '', 'My Card'],
+    ['03/01/2026', 'COFFEE SHOP #12', '-4.50', '', 'My Card'],
+    ['03/05/2026', 'Payment', '100.00', 'From chequing account', 'My Card']]);
+  assert.deepEqual(plain(Q.buildOutput(items, { ...opts, dateMode: 'effective' }).map(r => r.date)), ['03/02/2026', '03/02/2026', '03/05/2026']);
+  // a payee set for the purchase kind overrides every row; blank falls back to each merchant
+  const k = { 'Card|Purchase|out': { payee: '' } };
+  assert.equal(Q.buildOutput(items, { ...opts, kinds: k })[0].payee, 'COFFEE SHOP #12');
 });

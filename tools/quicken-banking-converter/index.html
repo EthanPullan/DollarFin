@@ -185,7 +185,7 @@
       <section class="section">
         <h2 class="section-title">1 · Exports &amp; statements</h2>
         <label class="drop" id="drop" for="file">
-          <b>Drop Wealthsimple CSVs here</b>activities exports or monthly statements — pick several at once, or add more later
+          <b>Drop Wealthsimple CSVs here</b>activities exports, monthly statements or credit card statements — pick several at once, or add more later
         </label>
         <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
         <ul class="files" id="fileList"></ul>
@@ -211,7 +211,7 @@
           <option value="dmy">DD/MM/YYYY</option>
         </select>
         <p class="hint">If Quicken rejects the file, pick the format your Windows short date uses.</p>
-        <p class="hint">Executed date is the "executed at" date in the description — the same date the investment converter uses, so transfers between accounts line up.</p>
+        <p class="hint">Executed date is the "executed at" date in the description (for a credit card, the transaction date; effective = the post date) — the same date the investment converter uses, so transfers between accounts line up.</p>
       </section>
 
       <section class="section">
@@ -246,7 +246,7 @@
 
     <section class="stage">
       <div class="stage-scroll">
-        <div class="empty" id="emptyState">Choose Wealthsimple activities exports or monthly-statement CSVs on the left to preview the Quicken import.</div>
+        <div class="empty" id="emptyState">Choose Wealthsimple activities exports, monthly statements or credit card statements on the left to preview the Quicken import.</div>
 
         <div class="card hidden" id="warnSection">
           <div class="card-head"><h2 class="section-title">Needs your attention</h2></div>
@@ -385,13 +385,39 @@ function convertStatement(objs, name) {
   return { items, warnings };
 }
 
+// A Wealthsimple credit card statement (transaction_date, post_date, type, details, amount). The file's
+// signs are the card's view (a purchase is positive); Quicken's are net worth's, so they're flipped. The
+// file names no account, so every card row shares one account id, named by the user.
+const CARD_ACCOUNT = 'wealthsimple-credit-card';
+const CARD_PAYEE = { Payment: 'Payment', Interest: 'Interest charge', Fee: 'Fee' };
+function convertCreditCard(objs) {
+  const items = [], warnings = [];
+  objs.forEach((o, idx) => {
+    if (o.currency && o.currency.toUpperCase() !== 'CAD') { warnings.push(`Line ${idx + 2}: ${o.currency} amount, row skipped.`); return; }
+    const amt = -parseFloat(String(o.amount).replace(/,/g, ''));
+    if (!Number.isFinite(amt)) { warnings.push(`Line ${idx + 2}: no amount, row skipped.`); return; }
+    const type = o.type || 'Other', details = String(o.details || '').replace(/\s+/g, ' ').trim(), dir = amt < 0 ? 'out' : 'in';
+    const perRow = !CARD_PAYEE[type];   // purchases and refunds: the merchant is the payee
+    items.push({
+      id: idx, line: idx + 2, amt, desc: details, memo: perRow ? '' : details,
+      effDate: o.post_date || o.transaction_date, execDate: o.transaction_date || o.post_date,
+      accountId: CARD_ACCOUNT, accountType: 'Credit card',
+      kind: ['Card', type, dir].join('|'), kindLabel: type, kindDetail: 'credit card',
+      defaultPayee: perRow ? details : CARD_PAYEE[type], perRowPayee: perRow,
+      key: Object.values(o).join('|'),
+    });
+  });
+  return { items, warnings };
+}
+
 // Returns { items, warnings }. Takes an activities export (every row with cash is a banking
 // transaction; rows with a symbol are trades, left to the investment converter) or a monthly statement.
 function convert(objs, name = '') {
   const items = [], warnings = [];
   if (objs.length && ['date', 'transaction', 'amount'].every(k => k in objs[0])) return convertStatement(objs, name);
+  if (objs.length && ['transaction_date', 'post_date', 'details', 'amount'].every(k => k in objs[0])) return convertCreditCard(objs);
   if (!objs.length || !('net_cash_amount' in objs[0]) || !('effective_date' in objs[0])) {
-    warnings.push('This doesn\'t look like a Wealthsimple activities export or monthly statement, file skipped.');
+    warnings.push('This doesn\'t look like a Wealthsimple activities export, monthly statement or credit card statement, file skipped.');
     return { items, warnings };
   }
   let trades = 0;
@@ -442,7 +468,7 @@ function combine(files) {
     warnings.push(`${dupes} row(s) appeared in more than one export and were included once. Check the date ranges overlap as you expect.`);
   // The overlap check only catches identical rows, and the two formats never produce identical rows.
   const formats = {};
-  items.forEach(it => { (formats[it.accountId] ||= new Set()).add(it.kind.startsWith('Statement|') ? 'statement' : 'activities'); });
+  items.forEach(it => { (formats[it.accountId] ||= new Set()).add(it.kind.startsWith('Statement|') ? 'statement' : it.kind.startsWith('Card|') ? 'card' : 'activities'); });
   Object.entries(formats).forEach(([id, f]) => { if (f.size > 1)
     warnings.push(`Account ${id} is in both an activities export and a monthly statement — any dates they share will be imported twice. Use one format per account.`); });
   return { items, warnings, dropped };
@@ -467,11 +493,11 @@ function buildOutput(items, opts) {
       const k = opts.kinds[it.kind] || {};
       const r = Object.fromEntries(FIELDS.map(h => [h, '']));
       r.date = formatDate(iso, opts.dateFmt);
-      r.payee = (k.payee ?? it.defaultPayee).trim();
+      r.payee = (k.payee || '').trim() || it.defaultPayee;   // blank → the row's own payee (a card's merchant)
       r.amount = it.amt.toFixed(2);
       r.category = (k.category || '').trim();
       r.account = (opts.accounts[it.accountId].name || '').trim();
-      r.memo = it.desc;
+      r.memo = it.memo ?? it.desc;
       r._id = it.id;
       r._iso = iso;
       return r;
@@ -719,7 +745,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     items.forEach(i => { if (!accts.has(i.accountId)) accts.set(i.accountId, i.accountType); });
     // Statement accounts (no account type in the file) start ticked unless they hold trades.
     const fromStatement = id => items.some(i => i.accountId === id && i.kind.startsWith('Statement|') && !i.investment);
-    accts.forEach((type, id) => { accounts[id] ||= { name: type || 'Wealthsimple', include: isCashAccount(type) || fromStatement(id) }; });
+    accts.forEach((type, id) => { accounts[id] ||= { name: id === CARD_ACCOUNT ? 'Wealthsimple Credit Card' : type || 'Wealthsimple', include: isCashAccount(type) || fromStatement(id) || id === CARD_ACCOUNT }; });
     $('accounts').innerHTML = [...accts].map(([id, type]) => `<div class="acct${accounts[id].include ? '' : ' off'}">
         <div class="acct-head"><label class="check"><input type="checkbox" data-a="${esc(id)}" ${accounts[id].include ? 'checked' : ''}>${esc(type || 'Account')}</label>
           <span class="acct-id">${esc(id)}</span></div>
@@ -740,7 +766,7 @@ function nearMisses(ours, theirs, matches, { days = 3, absolute = false, reach =
     $('kindTable').innerHTML = '<tr><th>Transaction</th><th>Rows</th><th>Payee</th><th>Category</th></tr>' +
       [...ks].map(([kind, { n, it }]) => `<tr><td title="${esc(it.kindDetail)}">${esc(it.kindLabel)}${it.kindDetail ? ` <span class="fmeta">${esc(it.kindDetail)}</span>` : ''}</td>
         <td class="num">${n}</td>
-        <td><input type="text" data-k="${esc(kind)}" data-f="payee" value="${esc(kinds[kind]?.payee ?? it.defaultPayee)}"></td>
+        <td><input type="text" data-k="${esc(kind)}" data-f="payee" value="${esc(kinds[kind]?.payee ?? (it.perRowPayee ? '' : it.defaultPayee))}"${it.perRowPayee ? ' placeholder="each row\'s merchant"' : ''}></td>
         <td><input type="text" data-k="${esc(kind)}" data-f="category" list="catList" value="${esc(kinds[kind]?.category ?? '')}" placeholder="${qkCats.length ? 'Pick or type a category' : 'e.g. Interest Inc'}"></td></tr>`).join('');
     $('kindSection').classList.toggle('hidden', ks.size === 0);
     $('kindTable').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
